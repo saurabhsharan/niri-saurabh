@@ -1,7 +1,12 @@
+use std::sync::Mutex;
+
 use niri_config::CornerRadius;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle, Scale};
+use smithay::wayland::compositor::with_states;
+use wayland_server::protocol::wl_surface::WlSurface;
 
+use crate::handlers::background_effect::get_cached_blur_region;
 use crate::niri_render_elements;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::damage::ExtraDamage;
@@ -9,6 +14,7 @@ use crate::render_helpers::framebuffer_effect::{FramebufferEffect, FramebufferEf
 use crate::render_helpers::xray::{XrayElement, XrayPos};
 use crate::render_helpers::RenderCtx;
 use crate::utils::region::TransformedRegion;
+use crate::utils::surface_geo;
 
 #[derive(Debug)]
 pub struct BackgroundEffect {
@@ -192,4 +198,68 @@ impl BackgroundEffect {
             }
         }
     }
+}
+
+/// Per-surface background effect stored in its data map.
+struct SurfaceBackgroundEffect(Mutex<BackgroundEffect>);
+
+pub fn render_for_surface(
+    surface: &WlSurface,
+    ctx: RenderCtx<GlesRenderer>,
+    ns: Option<usize>,
+    blur_config: niri_config::Blur,
+    location: Point<f64, Logical>,
+    scale: Scale<f64>,
+    push: &mut dyn FnMut(BackgroundEffectElement),
+) {
+    let blur_region = with_states(surface, get_cached_blur_region);
+    let Some(rects) = blur_region else {
+        return;
+    };
+    if rects.is_empty() {
+        return;
+    }
+
+    let main_surface_geo = surface_geo(surface).unwrap_or_default();
+    let mut main_surface_geo = main_surface_geo.to_f64();
+    main_surface_geo.loc += location;
+
+    let subregion = TransformedRegion {
+        rects,
+        scale: Scale::from(1.),
+        offset: main_surface_geo.loc,
+    };
+
+    let geometry = main_surface_geo
+        .to_physical_precise_round(scale)
+        .to_logical(scale);
+
+    let params = RenderParams {
+        geometry,
+        subregion: Some(subregion),
+        clip: None,
+        scale: scale.x,
+    };
+
+    with_states(surface, |states| {
+        let background_effect = states.data_map.get_or_insert(|| {
+            let mut effect = BackgroundEffect::new(blur_config);
+            // All of these params are static so we can do it here.
+            effect.update_render_elements(
+                CornerRadius::default(),
+                niri_config::BackgroundEffect {
+                    // We don't do xray on popups.
+                    xray: Some(false),
+                    ..Default::default()
+                },
+                // We always have a blur region.
+                true,
+            );
+            SurfaceBackgroundEffect(Mutex::new(effect))
+        });
+        let mut background_effect = background_effect.0.lock().unwrap();
+
+        background_effect.update_config(blur_config);
+        background_effect.render(ctx, ns, params, XrayPos::default(), &mut |elem| push(elem));
+    });
 }
