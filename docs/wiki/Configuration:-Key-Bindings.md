@@ -112,10 +112,11 @@ For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`,
 
 ### Synthetic Scroll Actions
 
-You can also bind keys to inject a synthetic vertical mouse wheel tick.
+You can also bind keys to inject synthetic vertical mouse wheel scrolling.
 This is useful for scrolling applications that do not handle keyboard scroll keys like <kbd>PageUp</kbd> or <kbd>PageDown</kbd>.
 
 By default, these actions scroll the surface currently under the pointer, even if it is not focused.
+They ramp up smoothly over about one second to a final speed of 25 wheel ticks per second.
 
 ```kdl
 binds {
@@ -124,18 +125,24 @@ binds {
 }
 ```
 
+If you want to customize the final speed, set `ticks-per-second`.
+
+```kdl
+binds {
+    Mod+J { inject-scroll-down ticks-per-second=40; }
+    Mod+K { inject-scroll-up ticks-per-second=40; }
+}
+```
+
 If you want the bind to first move the pointer to the focused window, set `warp-to-focused-window=true`.
 The pointer is warped to the center of the focused tile and stays there.
 
 ```kdl
 binds {
-    Mod+J { inject-scroll-down warp-to-focused-window=true; }
-    Mod+K { inject-scroll-up warp-to-focused-window=true; }
+    Mod+J { inject-scroll-down warp-to-focused-window=true ticks-per-second=40; }
+    Mod+K { inject-scroll-up warp-to-focused-window=true ticks-per-second=40; }
 }
 ```
-
-These actions inject one discrete mouse wheel notch per activation.
-Holding the bind will repeat according to your keyboard repeat settings.
 
 ### Mouse Click Bindings
 

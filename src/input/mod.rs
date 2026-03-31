@@ -47,7 +47,9 @@ use self::spatial_movement_grab::SpatialMovementGrab;
 use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
-use crate::niri::{CastTarget, CenterCoords, PointerVisibility, State};
+use crate::niri::{
+    ActiveSmoothScroll, CastTarget, CenterCoords, PointerVisibility, SmoothScrollDirection, State,
+};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
@@ -68,8 +70,11 @@ pub mod touch_resize_grab;
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
-const SYNTHETIC_SCROLL_AMOUNT: f64 = 15.;
+const SYNTHETIC_SCROLL_TICK_VALUE: f64 = 15.;
 const SYNTHETIC_SCROLL_V120: i32 = 120;
+const SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND: f64 = 25.;
+const SYNTHETIC_SCROLL_INITIAL_TICKS_PER_SECOND: f64 = 5.;
+const SYNTHETIC_SCROLL_RAMP_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TabletData {
@@ -384,6 +389,7 @@ impl State {
             if let Some(token) = self.niri.bind_repeat_timer.take() {
                 self.niri.event_loop.remove(token);
             }
+            self.stop_smooth_scroll();
         }
 
         if pressed {
@@ -564,6 +570,13 @@ impl State {
             return;
         }
 
+        if matches!(
+            &bind.action,
+            Action::InjectScrollUp(..) | Action::InjectScrollDown(..)
+        ) {
+            return;
+        }
+
         // Stop the previous key repeat if any.
         if let Some(token) = self.niri.bind_repeat_timer.take() {
             self.niri.event_loop.remove(token);
@@ -671,11 +684,13 @@ impl State {
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
+                self.stop_smooth_scroll();
             }
             Action::Suspend => {
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
+                self.stop_smooth_scroll();
             }
             Action::PowerOffMonitors => {
                 self.niri.deactivate_monitors(&mut self.backend);
@@ -799,18 +814,22 @@ impl State {
                     }
                 }
             }
-            Action::InjectScrollUp(warp_to_focused_window) => {
-                self.inject_scroll(
-                    -SYNTHETIC_SCROLL_AMOUNT,
-                    -SYNTHETIC_SCROLL_V120,
+            Action::InjectScrollUp(warp_to_focused_window, ticks_per_second) => {
+                self.start_smooth_scroll(
+                    SmoothScrollDirection::Up,
                     warp_to_focused_window,
+                    ticks_per_second
+                        .map(|ticks_per_second| ticks_per_second.0)
+                        .unwrap_or(SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND),
                 );
             }
-            Action::InjectScrollDown(warp_to_focused_window) => {
-                self.inject_scroll(
-                    SYNTHETIC_SCROLL_AMOUNT,
-                    SYNTHETIC_SCROLL_V120,
+            Action::InjectScrollDown(warp_to_focused_window, ticks_per_second) => {
+                self.start_smooth_scroll(
+                    SmoothScrollDirection::Down,
                     warp_to_focused_window,
+                    ticks_per_second
+                        .map(|ticks_per_second| ticks_per_second.0)
+                        .unwrap_or(SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND),
                 );
             }
             Action::CloseWindow => {
@@ -2400,7 +2419,7 @@ impl State {
         }
     }
 
-    fn refresh_pointer_focus_for_injected_scroll(&mut self) -> bool {
+    fn refresh_pointer_focus_for_injected_scroll(&mut self, time: u32) -> bool {
         let (location, current_focus) = {
             let pointer = &self.niri.seat.get_pointer().unwrap();
             (pointer.current_location(), pointer.current_focus())
@@ -2424,7 +2443,7 @@ impl State {
                 &MotionEvent {
                     location,
                     serial: SERIAL_COUNTER.next_serial(),
-                    time: get_monotonic_time().as_millis() as u32,
+                    time,
                 },
             );
             self.niri.maybe_activate_pointer_constraint();
@@ -2433,11 +2452,29 @@ impl State {
         true
     }
 
-    fn inject_scroll(
+    fn emit_synthetic_scroll(
         &mut self,
+        time: u32,
         vertical_amount: f64,
-        vertical_amount_v120: i32,
+        vertical_amount_v120: Option<i32>,
+    ) {
+        let mut frame = AxisFrame::new(time)
+            .source(AxisSource::Wheel)
+            .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
+            .value(Axis::Vertical, vertical_amount);
+        if let Some(vertical_amount_v120) = vertical_amount_v120.filter(|v120| *v120 != 0) {
+            frame = frame.v120(Axis::Vertical, vertical_amount_v120);
+        }
+        let pointer = &self.niri.seat.get_pointer().unwrap();
+        pointer.axis(self, frame);
+        pointer.frame(self);
+    }
+
+    fn start_smooth_scroll(
+        &mut self,
+        direction: SmoothScrollDirection,
         warp_to_focused_window: bool,
+        final_ticks_per_second: f64,
     ) {
         if self.niri.seat.get_pointer().unwrap().is_grabbed() {
             return;
@@ -2447,18 +2484,101 @@ impl State {
             return;
         }
 
-        if !self.refresh_pointer_focus_for_injected_scroll() {
+        let now = get_monotonic_time();
+        let time = now.as_millis() as u32;
+        if !self.refresh_pointer_focus_for_injected_scroll(time) {
             return;
         }
 
-        let frame = AxisFrame::new(get_monotonic_time().as_millis() as u32)
-            .source(AxisSource::Wheel)
-            .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
-            .value(Axis::Vertical, vertical_amount)
-            .v120(Axis::Vertical, vertical_amount_v120);
-        let pointer = &self.niri.seat.get_pointer().unwrap();
-        pointer.axis(self, frame);
-        pointer.frame(self);
+        self.niri.active_smooth_scroll = Some(ActiveSmoothScroll {
+            direction,
+            final_ticks_per_second,
+            start_time: now,
+            last_emit_time: now,
+            v120_remainder: 0.,
+        });
+
+        if let Some(output) = self.niri.output_under_cursor() {
+            self.niri.queue_redraw(&output);
+        }
+    }
+
+    pub(crate) fn stop_smooth_scroll(&mut self) {
+        self.niri.active_smooth_scroll = None;
+    }
+
+    pub(crate) fn advance_smooth_scroll_for_output(
+        &mut self,
+        output: &Output,
+        target_presentation_time: Duration,
+    ) {
+        let Some(target_output) = self.niri.output_under_cursor() else {
+            return;
+        };
+        if target_output != *output {
+            return;
+        }
+
+        if self.niri.seat.get_pointer().unwrap().is_grabbed() {
+            self.stop_smooth_scroll();
+            return;
+        }
+
+        let Some(mut smooth_scroll) = self.niri.active_smooth_scroll.take() else {
+            return;
+        };
+
+        let delta = target_presentation_time.saturating_sub(smooth_scroll.last_emit_time);
+        smooth_scroll.last_emit_time = target_presentation_time;
+
+        if delta.is_zero() {
+            self.niri.active_smooth_scroll = Some(smooth_scroll);
+            return;
+        }
+
+        let time = target_presentation_time.as_millis() as u32;
+        if !self.refresh_pointer_focus_for_injected_scroll(time) {
+            self.niri.active_smooth_scroll = Some(smooth_scroll);
+            return;
+        }
+
+        let elapsed = target_presentation_time.saturating_sub(smooth_scroll.start_time);
+        let current_ticks_per_second =
+            self.smooth_scroll_speed_for_elapsed(elapsed, smooth_scroll.final_ticks_per_second);
+        let delta_ticks = current_ticks_per_second * delta.as_secs_f64();
+
+        if delta_ticks <= 0. {
+            self.niri.active_smooth_scroll = Some(smooth_scroll);
+            return;
+        }
+
+        let sign = smooth_scroll.direction.sign();
+        let vertical_amount = sign * SYNTHETIC_SCROLL_TICK_VALUE * delta_ticks;
+
+        smooth_scroll.v120_remainder += sign * f64::from(SYNTHETIC_SCROLL_V120) * delta_ticks;
+        let v120_steps = (smooth_scroll.v120_remainder / f64::from(SYNTHETIC_SCROLL_V120)).trunc();
+        let vertical_amount_v120 = (v120_steps as i32) * SYNTHETIC_SCROLL_V120;
+        smooth_scroll.v120_remainder -= f64::from(vertical_amount_v120);
+
+        self.emit_synthetic_scroll(
+            time,
+            vertical_amount,
+            (vertical_amount_v120 != 0).then_some(vertical_amount_v120),
+        );
+        self.niri.active_smooth_scroll = Some(smooth_scroll);
+    }
+
+    fn smooth_scroll_speed_for_elapsed(
+        &self,
+        elapsed: Duration,
+        final_ticks_per_second: f64,
+    ) -> f64 {
+        let progress =
+            (elapsed.as_secs_f64() / SYNTHETIC_SCROLL_RAMP_DURATION.as_secs_f64()).clamp(0., 1.);
+        let progress = progress * progress * (3. - 2. * progress);
+        let initial_ticks_per_second =
+            final_ticks_per_second.min(SYNTHETIC_SCROLL_INITIAL_TICKS_PER_SECOND);
+        initial_ticks_per_second + (final_ticks_per_second - initial_ticks_per_second) * progress
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {

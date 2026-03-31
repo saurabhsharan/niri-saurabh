@@ -322,6 +322,7 @@ pub struct Niri {
     pub suppressed_buttons: HashSet<u32>,
     pub bind_cooldown_timers: HashMap<Key, RegistrationToken>,
     pub bind_repeat_timer: Option<RegistrationToken>,
+    pub active_smooth_scroll: Option<ActiveSmoothScroll>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
@@ -436,6 +437,30 @@ impl PointerVisibility {
 pub struct DndIcon {
     pub surface: WlSurface,
     pub offset: Point<i32, Logical>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmoothScrollDirection {
+    Up,
+    Down,
+}
+
+impl SmoothScrollDirection {
+    pub fn sign(self) -> f64 {
+        match self {
+            Self::Up => -1.,
+            Self::Down => 1.,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveSmoothScroll {
+    pub direction: SmoothScrollDirection,
+    pub final_ticks_per_second: f64,
+    pub start_time: Duration,
+    pub last_emit_time: Duration,
+    pub v120_remainder: f64,
 }
 
 pub struct OutputState {
@@ -755,7 +780,7 @@ impl State {
         // build up (the 1 second frame callback timer will call this line).
         self.niri.advance_animations();
 
-        self.niri.redraw_queued_outputs(&mut self.backend);
+        self.redraw_queued_outputs();
 
         {
             let _span = tracy_client::span!("flush_clients");
@@ -769,6 +794,23 @@ impl State {
         self.niri.clock.clear();
         self.niri.pointer_inactivity_timer_got_reset = false;
         self.niri.notified_activity_this_iteration = false;
+    }
+
+    fn redraw_queued_outputs(&mut self) {
+        while let Some((output, _)) = self.niri.output_state.iter().find(|(_, state)| {
+            matches!(
+                state.redraw_state,
+                RedrawState::Queued | RedrawState::WaitingForEstimatedVBlankAndQueued(_)
+            )
+        }) {
+            trace!("redrawing output");
+            let output = output.clone();
+            let target_presentation_time = self.niri.target_presentation_time(&output);
+
+            self.advance_smooth_scroll_for_output(&output, target_presentation_time);
+            self.niri
+                .redraw(&mut self.backend, &output, target_presentation_time);
+        }
     }
 
     // We monitor both libinput and logind: libinput is always there (including without DBus), but
@@ -2490,6 +2532,7 @@ impl Niri {
             suppressed_buttons: HashSet::new(),
             bind_cooldown_timers: HashMap::new(),
             bind_repeat_timer: Option::default(),
+            active_smooth_scroll: None,
             presentation_state,
             security_context_state,
             gamma_control_manager_state,
@@ -3383,6 +3426,16 @@ impl Niri {
         self.global_space.output_under(pos).next().cloned()
     }
 
+    fn target_presentation_time(&self, output: &Output) -> Duration {
+        self.output_state[output]
+            .frame_clock
+            .next_presentation_time()
+    }
+
+    fn smooth_scroll_active_for_output(&self, output: &Output) -> bool {
+        self.active_smooth_scroll.is_some() && self.output_under_cursor().as_ref() == Some(output)
+    }
+
     pub fn output_left_of(&self, current: &Output) -> Option<Output> {
         let current_geo = self.global_space.output_geometry(current)?;
         let extended_geo = Rectangle::new(
@@ -3596,7 +3649,8 @@ impl Niri {
         }) {
             trace!("redrawing output");
             let output = output.clone();
-            self.redraw(backend, &output);
+            let target_presentation_time = self.target_presentation_time(&output);
+            self.redraw(backend, &output, target_presentation_time);
         }
     }
 
@@ -4309,7 +4363,12 @@ impl Niri {
         }
     }
 
-    fn redraw(&mut self, backend: &mut Backend, output: &Output) {
+    fn redraw(
+        &mut self,
+        backend: &mut Backend,
+        output: &Output,
+        target_presentation_time: Duration,
+    ) {
         let _span = tracy_client::span!("Niri::redraw");
 
         // Verify our invariant.
@@ -4319,8 +4378,6 @@ impl Niri {
             RedrawState::Queued | RedrawState::WaitingForEstimatedVBlankAndQueued(_)
         ));
 
-        let target_presentation_time = state.frame_clock.next_presentation_time();
-
         // Freeze the clock at the target time.
         self.clock.set_unadjusted(target_presentation_time);
 
@@ -4328,6 +4385,7 @@ impl Niri {
 
         let mut res = RenderResult::Skipped;
         if self.monitors_active {
+            let smooth_scroll_active = self.smooth_scroll_active_for_output(output);
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
@@ -4349,6 +4407,8 @@ impl Niri {
                     .filter_map(|surface| self.mapped_layer_surfaces.get(surface))
                     .any(|mapped| mapped.are_animations_ongoing());
             }
+
+            state.unfinished_animations_remain |= smooth_scroll_active;
 
             // Render.
             res = backend.render(self, output, target_presentation_time);

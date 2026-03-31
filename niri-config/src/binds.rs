@@ -14,6 +14,7 @@ use smithay::input::keyboard::Keysym;
 
 use crate::recent_windows::{MruDirection, MruFilter, MruScope};
 use crate::utils::{expect_only_children, MergeWith};
+use crate::FloatOrInt;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
@@ -144,8 +145,14 @@ pub enum Action {
         path: Option<String>,
     },
     ToggleKeyboardShortcutsInhibit,
-    InjectScrollUp(#[knuffel(property(name = "warp-to-focused-window"), default)] bool),
-    InjectScrollDown(#[knuffel(property(name = "warp-to-focused-window"), default)] bool),
+    InjectScrollUp(
+        #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
+        #[knuffel(property(name = "ticks-per-second"))] Option<FloatOrInt<1, 1000>>,
+    ),
+    InjectScrollDown(
+        #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
+        #[knuffel(property(name = "ticks-per-second"))] Option<FloatOrInt<1, 1000>>,
+    ),
     CloseWindow,
     #[knuffel(skip)]
     CloseWindowById(u64),
