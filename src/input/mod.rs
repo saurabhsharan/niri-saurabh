@@ -2490,13 +2490,30 @@ impl State {
             return;
         }
 
-        self.niri.active_smooth_scroll = Some(ActiveSmoothScroll {
+        let mut smooth_scroll = ActiveSmoothScroll {
             direction,
             final_ticks_per_second,
             start_time: now,
             last_emit_time: now,
             v120_remainder: 0.,
-        });
+        };
+
+        if let Some(output) = self.niri.output_under_cursor() {
+            let initial_delta = self
+                .niri
+                .output_state
+                .get(&output)
+                .and_then(|state| state.frame_clock.refresh_interval())
+                .unwrap_or_else(|| Duration::from_secs_f64(1. / 60.));
+            let initial_ticks_per_second =
+                self.smooth_scroll_speed_for_elapsed(Duration::ZERO, final_ticks_per_second);
+            let delta_ticks = initial_ticks_per_second * initial_delta.as_secs_f64();
+            if delta_ticks > 0. {
+                self.emit_smooth_scroll_delta(&mut smooth_scroll, time, delta_ticks);
+            }
+        }
+
+        self.niri.active_smooth_scroll = Some(smooth_scroll);
 
         if let Some(output) = self.niri.output_under_cursor() {
             self.niri.queue_redraw(&output);
@@ -2552,19 +2569,7 @@ impl State {
             return;
         }
 
-        let sign = smooth_scroll.direction.sign();
-        let vertical_amount = sign * SYNTHETIC_SCROLL_TICK_VALUE * delta_ticks;
-
-        smooth_scroll.v120_remainder += sign * f64::from(SYNTHETIC_SCROLL_V120) * delta_ticks;
-        let v120_steps = (smooth_scroll.v120_remainder / f64::from(SYNTHETIC_SCROLL_V120)).trunc();
-        let vertical_amount_v120 = (v120_steps as i32) * SYNTHETIC_SCROLL_V120;
-        smooth_scroll.v120_remainder -= f64::from(vertical_amount_v120);
-
-        self.emit_synthetic_scroll(
-            time,
-            vertical_amount,
-            (vertical_amount_v120 != 0).then_some(vertical_amount_v120),
-        );
+        self.emit_smooth_scroll_delta(&mut smooth_scroll, time, delta_ticks);
         self.niri.active_smooth_scroll = Some(smooth_scroll);
     }
 
@@ -2579,6 +2584,27 @@ impl State {
         let initial_ticks_per_second =
             final_ticks_per_second.min(SYNTHETIC_SCROLL_INITIAL_TICKS_PER_SECOND);
         initial_ticks_per_second + (final_ticks_per_second - initial_ticks_per_second) * progress
+    }
+
+    fn emit_smooth_scroll_delta(
+        &mut self,
+        smooth_scroll: &mut ActiveSmoothScroll,
+        time: u32,
+        delta_ticks: f64,
+    ) {
+        let sign = smooth_scroll.direction.sign();
+        let vertical_amount = sign * SYNTHETIC_SCROLL_TICK_VALUE * delta_ticks;
+
+        smooth_scroll.v120_remainder += sign * f64::from(SYNTHETIC_SCROLL_V120) * delta_ticks;
+        let v120_steps = (smooth_scroll.v120_remainder / f64::from(SYNTHETIC_SCROLL_V120)).trunc();
+        let vertical_amount_v120 = (v120_steps as i32) * SYNTHETIC_SCROLL_V120;
+        smooth_scroll.v120_remainder -= f64::from(vertical_amount_v120);
+
+        self.emit_synthetic_scroll(
+            time,
+            vertical_amount,
+            (vertical_amount_v120 != 0).then_some(vertical_amount_v120),
+        );
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
