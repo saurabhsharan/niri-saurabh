@@ -144,6 +144,8 @@ pub enum Action {
         path: Option<String>,
     },
     ToggleKeyboardShortcutsInhibit,
+    InjectScrollUp(#[knuffel(property(name = "warp-to-focused-window"), default)] bool),
+    InjectScrollDown(#[knuffel(property(name = "warp-to-focused-window"), default)] bool),
     CloseWindow,
     #[knuffel(skip)]
     CloseWindowById(u64),

@@ -11,12 +11,12 @@ use niri_config::{
 };
 use niri_ipc::LayoutSwitchTarget;
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
-    GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _, GestureSwipeUpdateEvent as _,
-    InputEvent, KeyState, KeyboardKeyEvent, Keycode, MouseButton, PointerAxisEvent,
-    PointerButtonEvent, PointerMotionEvent, ProximityState, Switch, SwitchState, SwitchToggleEvent,
-    TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent,
-    TabletToolTipState, TouchEvent,
+    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
+    DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent as _,
+    GestureSwipeUpdateEvent as _, InputEvent, KeyState, KeyboardKeyEvent, Keycode, MouseButton,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, ProximityState, Switch, SwitchState,
+    SwitchToggleEvent, TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent,
+    TabletToolTipEvent, TabletToolTipState, TouchEvent,
 };
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::dnd::DnDGrab;
@@ -47,7 +47,7 @@ use self::spatial_movement_grab::SpatialMovementGrab;
 use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
-use crate::niri::{CastTarget, PointerVisibility, State};
+use crate::niri::{CastTarget, CenterCoords, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
@@ -68,6 +68,8 @@ pub mod touch_resize_grab;
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
+const SYNTHETIC_SCROLL_AMOUNT: f64 = 15.;
+const SYNTHETIC_SCROLL_V120: i32 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TabletData {
@@ -796,6 +798,20 @@ impl State {
                         inhibitor.activate();
                     }
                 }
+            }
+            Action::InjectScrollUp(warp_to_focused_window) => {
+                self.inject_scroll(
+                    -SYNTHETIC_SCROLL_AMOUNT,
+                    -SYNTHETIC_SCROLL_V120,
+                    warp_to_focused_window,
+                );
+            }
+            Action::InjectScrollDown(warp_to_focused_window) => {
+                self.inject_scroll(
+                    SYNTHETIC_SCROLL_AMOUNT,
+                    SYNTHETIC_SCROLL_V120,
+                    warp_to_focused_window,
+                );
             }
             Action::CloseWindow => {
                 if let Some(mapped) = self.niri.layout.focus() {
@@ -2382,6 +2398,67 @@ impl State {
                 }
             }
         }
+    }
+
+    fn refresh_pointer_focus_for_injected_scroll(&mut self) -> bool {
+        let (location, current_focus) = {
+            let pointer = &self.niri.seat.get_pointer().unwrap();
+            (pointer.current_location(), pointer.current_focus())
+        };
+        let under = self.niri.contents_under(location);
+
+        if under.surface.is_none() {
+            return false;
+        }
+
+        let surface_under_pointer = under.surface.as_ref().map(|(surface, _)| surface);
+        let focus_needs_refresh =
+            current_focus.as_ref() != surface_under_pointer || self.niri.pointer_contents != under;
+
+        if focus_needs_refresh {
+            self.niri.pointer_contents.clone_from(&under);
+            let pointer = &self.niri.seat.get_pointer().unwrap();
+            pointer.motion(
+                self,
+                under.surface.clone(),
+                &MotionEvent {
+                    location,
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: get_monotonic_time().as_millis() as u32,
+                },
+            );
+            self.niri.maybe_activate_pointer_constraint();
+        }
+
+        true
+    }
+
+    fn inject_scroll(
+        &mut self,
+        vertical_amount: f64,
+        vertical_amount_v120: i32,
+        warp_to_focused_window: bool,
+    ) {
+        if self.niri.seat.get_pointer().unwrap().is_grabbed() {
+            return;
+        }
+
+        if warp_to_focused_window && !self.move_cursor_to_focused_tile(CenterCoords::BothAlways) {
+            return;
+        }
+
+        if !self.refresh_pointer_focus_for_injected_scroll() {
+            return;
+        }
+
+        let frame = AxisFrame::new(get_monotonic_time().as_millis() as u32)
+            .source(AxisSource::Wheel)
+            .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
+            .value(Axis::Vertical, vertical_amount)
+            .v120(Axis::Vertical, vertical_amount_v120);
+        let pointer = &self.niri.seat.get_pointer().unwrap();
+        pointer.axis(self, frame);
+        pointer.frame(self);
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {

@@ -110,6 +110,33 @@ binds {
 Both mouse wheel and touchpad scroll binds will prevent applications from receiving any scroll events when their modifiers are held down.
 For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`, all mouse wheel scrolling will be consumed by niri.
 
+### Synthetic Scroll Actions
+
+You can also bind keys to inject a synthetic vertical mouse wheel tick.
+This is useful for scrolling applications that do not handle keyboard scroll keys like <kbd>PageUp</kbd> or <kbd>PageDown</kbd>.
+
+By default, these actions scroll the surface currently under the pointer, even if it is not focused.
+
+```kdl
+binds {
+    Mod+J { inject-scroll-down; }
+    Mod+K { inject-scroll-up; }
+}
+```
+
+If you want the bind to first move the pointer to the focused window, set `warp-to-focused-window=true`.
+The pointer is warped to the center of the focused tile and stays there.
+
+```kdl
+binds {
+    Mod+J { inject-scroll-down warp-to-focused-window=true; }
+    Mod+K { inject-scroll-up warp-to-focused-window=true; }
+}
+```
+
+These actions inject one discrete mouse wheel notch per activation.
+Holding the bind will repeat according to your keyboard repeat settings.
+
 ### Mouse Click Bindings
 
 <sup>Since: 25.01</sup>
