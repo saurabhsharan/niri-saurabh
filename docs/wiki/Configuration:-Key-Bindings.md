@@ -116,7 +116,7 @@ You can also bind keys to inject synthetic vertical mouse wheel scrolling.
 This is useful for scrolling applications that do not handle keyboard scroll keys like <kbd>PageUp</kbd> or <kbd>PageDown</kbd>.
 
 By default, these actions scroll the surface currently under the pointer, even if it is not focused.
-They ramp up smoothly over about one second to a final speed of 25 wheel ticks per second.
+They ramp up smoothly over about one second to a default speed of `25`.
 
 ```kdl
 binds {
@@ -125,12 +125,12 @@ binds {
 }
 ```
 
-If you want to customize the final speed, set `ticks-per-second`.
+If you want to customize the final speed, set `speed`.
 
 ```kdl
 binds {
-    Mod+J { inject-scroll-down ticks-per-second=40; }
-    Mod+K { inject-scroll-up ticks-per-second=40; }
+    Mod+J { inject-scroll-down speed=40; }
+    Mod+K { inject-scroll-up speed=40; }
 }
 ```
 
@@ -139,8 +139,8 @@ The pointer is warped to the center of the focused tile and stays there.
 
 ```kdl
 binds {
-    Mod+J { inject-scroll-down warp-to-focused-window=true ticks-per-second=40; }
-    Mod+K { inject-scroll-up warp-to-focused-window=true ticks-per-second=40; }
+    Mod+J { inject-scroll-down warp-to-focused-window=true speed=40; }
+    Mod+K { inject-scroll-up warp-to-focused-window=true speed=40; }
 }
 ```
 

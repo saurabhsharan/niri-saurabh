@@ -70,10 +70,9 @@ pub mod touch_resize_grab;
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
-const SYNTHETIC_SCROLL_TICK_VALUE: f64 = 15.;
-const SYNTHETIC_SCROLL_V120: i32 = 120;
-const SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND: f64 = 25.;
-const SYNTHETIC_SCROLL_INITIAL_TICKS_PER_SECOND: f64 = 5.;
+const SYNTHETIC_SCROLL_DELTA_PER_TICK: f64 = 15.;
+const SYNTHETIC_SCROLL_DEFAULT_SPEED: f64 = 25.;
+const SYNTHETIC_SCROLL_INITIAL_SPEED: f64 = 5.;
 const SYNTHETIC_SCROLL_RAMP_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -814,22 +813,18 @@ impl State {
                     }
                 }
             }
-            Action::InjectScrollUp(warp_to_focused_window, ticks_per_second) => {
+            Action::InjectScrollUp(warp_to_focused_window, speed) => {
                 self.start_smooth_scroll(
                     SmoothScrollDirection::Up,
                     warp_to_focused_window,
-                    ticks_per_second
-                        .map(|ticks_per_second| ticks_per_second.0)
-                        .unwrap_or(SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND),
+                    speed.map(|speed| speed.0).unwrap_or(SYNTHETIC_SCROLL_DEFAULT_SPEED),
                 );
             }
-            Action::InjectScrollDown(warp_to_focused_window, ticks_per_second) => {
+            Action::InjectScrollDown(warp_to_focused_window, speed) => {
                 self.start_smooth_scroll(
                     SmoothScrollDirection::Down,
                     warp_to_focused_window,
-                    ticks_per_second
-                        .map(|ticks_per_second| ticks_per_second.0)
-                        .unwrap_or(SYNTHETIC_SCROLL_DEFAULT_TICKS_PER_SECOND),
+                    speed.map(|speed| speed.0).unwrap_or(SYNTHETIC_SCROLL_DEFAULT_SPEED),
                 );
             }
             Action::CloseWindow => {
@@ -2452,19 +2447,16 @@ impl State {
         true
     }
 
-    fn emit_synthetic_scroll(
-        &mut self,
-        time: u32,
-        vertical_amount: f64,
-        vertical_amount_v120: Option<i32>,
-    ) {
-        let mut frame = AxisFrame::new(time)
-            .source(AxisSource::Wheel)
+    fn emit_synthetic_scroll(&mut self, time: u32, vertical_delta: f64) {
+        // This path used to emit wheel-style scrolling (AxisSource::Wheel plus v120 steps).
+        // That preserved "mouse wheel" semantics too well: browsers treat Ctrl+wheel as zoom,
+        // while this action is meant to behave like compositor-driven smooth scrolling. Emit a
+        // continuous axis stream instead so clients handle it more like non-wheel scrolling, while
+        // keeping the existing pointer-targeting and ramp-up behavior unchanged.
+        let frame = AxisFrame::new(time)
+            .source(AxisSource::Continuous)
             .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
-            .value(Axis::Vertical, vertical_amount);
-        if let Some(vertical_amount_v120) = vertical_amount_v120.filter(|v120| *v120 != 0) {
-            frame = frame.v120(Axis::Vertical, vertical_amount_v120);
-        }
+            .value(Axis::Vertical, vertical_delta);
         let pointer = &self.niri.seat.get_pointer().unwrap();
         pointer.axis(self, frame);
         pointer.frame(self);
@@ -2474,7 +2466,7 @@ impl State {
         &mut self,
         direction: SmoothScrollDirection,
         warp_to_focused_window: bool,
-        final_ticks_per_second: f64,
+        final_speed: f64,
     ) {
         if self.niri.seat.get_pointer().unwrap().is_grabbed() {
             return;
@@ -2492,10 +2484,9 @@ impl State {
 
         let mut smooth_scroll = ActiveSmoothScroll {
             direction,
-            final_ticks_per_second,
+            final_speed,
             start_time: now,
             last_emit_time: now,
-            v120_remainder: 0.,
         };
 
         if let Some(output) = self.niri.output_under_cursor() {
@@ -2505,9 +2496,8 @@ impl State {
                 .get(&output)
                 .and_then(|state| state.frame_clock.refresh_interval())
                 .unwrap_or_else(|| Duration::from_secs_f64(1. / 60.));
-            let initial_ticks_per_second =
-                self.smooth_scroll_speed_for_elapsed(Duration::ZERO, final_ticks_per_second);
-            let delta_ticks = initial_ticks_per_second * initial_delta.as_secs_f64();
+            let initial_speed = self.smooth_scroll_speed_for_elapsed(Duration::ZERO, final_speed);
+            let delta_ticks = initial_speed * initial_delta.as_secs_f64();
             if delta_ticks > 0. {
                 self.emit_smooth_scroll_delta(&mut smooth_scroll, time, delta_ticks);
             }
@@ -2560,9 +2550,8 @@ impl State {
         }
 
         let elapsed = target_presentation_time.saturating_sub(smooth_scroll.start_time);
-        let current_ticks_per_second =
-            self.smooth_scroll_speed_for_elapsed(elapsed, smooth_scroll.final_ticks_per_second);
-        let delta_ticks = current_ticks_per_second * delta.as_secs_f64();
+        let current_speed = self.smooth_scroll_speed_for_elapsed(elapsed, smooth_scroll.final_speed);
+        let delta_ticks = current_speed * delta.as_secs_f64();
 
         if delta_ticks <= 0. {
             self.niri.active_smooth_scroll = Some(smooth_scroll);
@@ -2576,14 +2565,13 @@ impl State {
     fn smooth_scroll_speed_for_elapsed(
         &self,
         elapsed: Duration,
-        final_ticks_per_second: f64,
+        final_speed: f64,
     ) -> f64 {
         let progress =
             (elapsed.as_secs_f64() / SYNTHETIC_SCROLL_RAMP_DURATION.as_secs_f64()).clamp(0., 1.);
         let progress = progress * progress * (3. - 2. * progress);
-        let initial_ticks_per_second =
-            final_ticks_per_second.min(SYNTHETIC_SCROLL_INITIAL_TICKS_PER_SECOND);
-        initial_ticks_per_second + (final_ticks_per_second - initial_ticks_per_second) * progress
+        let initial_speed = final_speed.min(SYNTHETIC_SCROLL_INITIAL_SPEED);
+        initial_speed + (final_speed - initial_speed) * progress
     }
 
     fn emit_smooth_scroll_delta(
@@ -2593,18 +2581,11 @@ impl State {
         delta_ticks: f64,
     ) {
         let sign = smooth_scroll.direction.sign();
-        let vertical_amount = sign * SYNTHETIC_SCROLL_TICK_VALUE * delta_ticks;
+        // Speed is still expressed in our synthetic tick pacing unit. Convert that pacing value
+        // into the continuous axis delta we emit to clients.
+        let vertical_delta = sign * SYNTHETIC_SCROLL_DELTA_PER_TICK * delta_ticks;
 
-        smooth_scroll.v120_remainder += sign * f64::from(SYNTHETIC_SCROLL_V120) * delta_ticks;
-        let v120_steps = (smooth_scroll.v120_remainder / f64::from(SYNTHETIC_SCROLL_V120)).trunc();
-        let vertical_amount_v120 = (v120_steps as i32) * SYNTHETIC_SCROLL_V120;
-        smooth_scroll.v120_remainder -= f64::from(vertical_amount_v120);
-
-        self.emit_synthetic_scroll(
-            time,
-            vertical_amount,
-            (vertical_amount_v120 != 0).then_some(vertical_amount_v120),
-        );
+        self.emit_synthetic_scroll(time, vertical_delta);
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {

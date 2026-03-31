@@ -147,11 +147,11 @@ pub enum Action {
     ToggleKeyboardShortcutsInhibit,
     InjectScrollUp(
         #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
-        #[knuffel(property(name = "ticks-per-second"))] Option<FloatOrInt<1, 1000>>,
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<1, 1000>>,
     ),
     InjectScrollDown(
         #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
-        #[knuffel(property(name = "ticks-per-second"))] Option<FloatOrInt<1, 1000>>,
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<1, 1000>>,
     ),
     CloseWindow,
     #[knuffel(skip)]

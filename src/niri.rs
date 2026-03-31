@@ -457,10 +457,9 @@ impl SmoothScrollDirection {
 #[derive(Debug, Clone)]
 pub struct ActiveSmoothScroll {
     pub direction: SmoothScrollDirection,
-    pub final_ticks_per_second: f64,
+    pub final_speed: f64,
     pub start_time: Duration,
     pub last_emit_time: Duration,
-    pub v120_remainder: f64,
 }
 
 pub struct OutputState {
