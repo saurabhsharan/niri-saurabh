@@ -371,6 +371,8 @@ pub enum Action {
     #[knuffel(skip)]
     LoadConfigFile(#[knuffel(argument)] Option<String>),
     #[knuffel(skip)]
+    FocusOrSpawn(Keysym),
+    #[knuffel(skip)]
     MruAdvance {
         direction: MruDirection,
         scope: Option<MruScope>,
