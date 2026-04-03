@@ -393,6 +393,31 @@ binds {
 }
 ```
 
+#### `make-window-thumbnail-pip`
+
+Toggle a small Picture-in-Picture thumbnail for the focused window.
+
+The thumbnail:
+- appears on the focused window's output;
+- stays visible across workspace switches on that output;
+- mirrors the source window live;
+- can be dragged with the mouse;
+- can be resized by dragging its corners;
+- can be resized with the mouse wheel or touchpad scroll while the pointer is over it;
+- stays clamped to the output, so resizing will not let it grow past the display edges;
+- hides while overview is open, including during the opening gesture;
+- shows a close button on hover.
+
+Pressing the bind again while the same window is focused removes its thumbnail.
+
+```kdl
+binds {
+    Mod+P { make-window-thumbnail-pip; }
+}
+```
+
+This is a compositor-managed thumbnail, not the same thing as an application's own Picture-in-Picture window.
+
 #### `toggle-keyboard-shortcuts-inhibit`
 
 <sup>Since: 25.02</sup>
