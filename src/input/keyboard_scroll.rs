@@ -9,6 +9,7 @@ use crate::utils::get_monotonic_time;
 
 const KEYBOARD_SCROLL_INTERVAL: Duration = Duration::from_nanos(8_333_333);
 pub const DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND: f64 = 150.;
+const KEYBOARD_SCROLL_MIN_DECAY_ACTIVE_TIME: Duration = Duration::from_secs(1);
 const KEYBOARD_SCROLL_DECAY_TIME_CONSTANT: Duration = Duration::from_millis(80);
 const KEYBOARD_SCROLL_MIN_VELOCITY: f64 = 1.;
 
@@ -44,6 +45,7 @@ pub struct ActiveKeyboardScroll {
     pub current_velocity: f64,
     pub decay: bool,
     pub is_decaying: bool,
+    pub started_at: Duration,
     pub last_tick_time: Duration,
     targets: KeyboardScrollTargets,
 }
@@ -55,14 +57,17 @@ impl State {
         speed: f64,
         decay: bool,
     ) {
+        let now = get_monotonic_time();
+
         self.niri.active_keyboard_scroll = Some(ActiveKeyboardScroll {
             direction,
             speed,
             current_velocity: speed,
             decay,
             is_decaying: false,
+            started_at: now,
             // Prime the first immediate tick with one interval's worth of scroll.
-            last_tick_time: get_monotonic_time().saturating_sub(KEYBOARD_SCROLL_INTERVAL),
+            last_tick_time: now.saturating_sub(KEYBOARD_SCROLL_INTERVAL),
             // Capture the initial target so later ticks can detect whether the scroll context
             // changed underneath us and should therefore stop immediately.
             targets: self.keyboard_scroll_targets(),
@@ -105,8 +110,9 @@ impl State {
         self.niri.active_keyboard_scroll = None;
     }
 
-    // Handle a normal key-release stop. This keeps the scroll alive briefly if decay is enabled,
-    // otherwise it falls back to the same hard stop as stop_keyboard_scroll_immediately().
+    // Handle a normal key-release stop. This keeps the scroll alive briefly if decay is enabled
+    // and the key was held long enough; otherwise it falls back to the same hard stop as
+    // stop_keyboard_scroll_immediately().
     pub(super) fn stop_keyboard_scroll_on_release(&mut self) {
         let Some(scroll) = &mut self.niri.active_keyboard_scroll else {
             return;
@@ -114,6 +120,14 @@ impl State {
 
         if !scroll.decay {
             // This is still a release-driven stop, but the bind explicitly disabled decay.
+            self.stop_keyboard_scroll_immediately();
+            return;
+        }
+
+        if get_monotonic_time().saturating_sub(scroll.started_at)
+            < KEYBOARD_SCROLL_MIN_DECAY_ACTIVE_TIME
+        {
+            // Short holds feel better with an immediate stop than with a residual decay tail.
             self.stop_keyboard_scroll_immediately();
             return;
         }
