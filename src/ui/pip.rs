@@ -161,13 +161,22 @@ impl PipManager {
     }
 
     pub fn toggle_pip(&mut self, mapped: &Mapped, output: &Output) -> Vec<Output> {
-        let removed = self.remove_by_source(mapped.id());
+        self.toggle_pip_for_source(mapped.id(), mapped.size(), output)
+    }
+
+    pub fn toggle_pip_for_source(
+        &mut self,
+        source_id: MappedId,
+        source_size: Size<i32, Logical>,
+        output: &Output,
+    ) -> Vec<Output> {
+        let removed = self.remove_by_source(source_id);
         if !removed.is_empty() {
             return removed;
         }
 
         let output_size = output_size(output);
-        let source_size = mapped.size().to_f64();
+        let source_size = source_size.to_f64();
         let size = thumbnail_size(source_size, output_size);
         let position = Point::new(
             f64::max(0., output_size.w - size.w - MARGIN),
@@ -179,7 +188,7 @@ impl PipManager {
 
         self.thumbnails.push(PipThumbnail {
             id,
-            source_id: mapped.id(),
+            source_id,
             output: output.clone(),
             position,
             size,
@@ -204,6 +213,12 @@ impl PipManager {
 
     pub fn find(&self, id: PipId) -> Option<&PipThumbnail> {
         self.thumbnails.iter().find(|thumb| thumb.id == id)
+    }
+
+    pub fn find_by_source(&self, source_id: MappedId) -> Option<&PipThumbnail> {
+        self.thumbnails
+            .iter()
+            .find(|thumb| thumb.source_id == source_id)
     }
 
     pub fn find_mut(&mut self, id: PipId) -> Option<&mut PipThumbnail> {

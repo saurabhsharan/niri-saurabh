@@ -8,5 +8,6 @@ mod animations;
 mod floating;
 mod fullscreen;
 mod layer_shell;
+mod pip;
 mod transactions;
 mod window_opening;
