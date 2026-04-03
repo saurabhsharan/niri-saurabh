@@ -4,7 +4,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use smithay::backend::input::{Axis, AxisRelativeDirection, AxisSource};
 use smithay::input::pointer::AxisFrame;
 
-use crate::niri::State;
+use crate::niri::{PointerVisibility, State};
 use crate::utils::get_monotonic_time;
 
 const KEYBOARD_SCROLL_INTERVAL: Duration = Duration::from_nanos(8_333_333);
@@ -158,6 +158,12 @@ impl State {
         if self.keyboard_scroll_targets() != scroll.targets {
             return;
         }
+
+        // Refresh pointer focus using Niri's existing pointer-content path so synthetic scrolling
+        // targets the same surface real pointer scrolling would currently hit.
+        self.niri.pointer_visibility = PointerVisibility::Visible;
+        self.niri.tablet_cursor_location = None;
+        self.update_pointer_contents();
 
         let now = get_monotonic_time();
         let delta = now.saturating_sub(scroll.last_tick_time);
