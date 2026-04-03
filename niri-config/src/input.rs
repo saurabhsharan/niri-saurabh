@@ -172,6 +172,8 @@ pub struct ScrollFactor {
     pub horizontal: Option<FloatOrInt<-100, 100>>,
     #[knuffel(property)]
     pub vertical: Option<FloatOrInt<-100, 100>>,
+    #[knuffel(property(name = "alt-multiplier"))]
+    pub alt_multiplier: Option<FloatOrInt<0, 100>>,
 }
 
 impl ScrollFactor {
@@ -180,6 +182,16 @@ impl ScrollFactor {
         let h = self.horizontal.map(|f| f.0).unwrap_or(base_value);
         let v = self.vertical.map(|f| f.0).unwrap_or(base_value);
         (h, v)
+    }
+
+    pub fn h_v_factors_with_alt(&self, alt_pressed: bool) -> (f64, f64) {
+        let (h, v) = self.h_v_factors();
+        let multiplier = if alt_pressed {
+            self.alt_multiplier.map(|f| f.0).unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        (h * multiplier, v * multiplier)
     }
 }
 
@@ -546,6 +558,7 @@ mod tests {
                 ),
                 horizontal: None,
                 vertical: None,
+                alt_multiplier: None,
             },
         )
         "#);
@@ -559,6 +572,7 @@ mod tests {
                 ),
                 horizontal: None,
                 vertical: None,
+                alt_multiplier: None,
             },
         )
         "#);
@@ -592,6 +606,7 @@ mod tests {
                         -1.0,
                     ),
                 ),
+                alt_multiplier: None,
             },
         )
         "#);
@@ -609,6 +624,7 @@ mod tests {
                         0.5,
                     ),
                 ),
+                alt_multiplier: None,
             },
         )
         "#);
@@ -638,6 +654,7 @@ mod tests {
                     ),
                 ),
                 vertical: None,
+                alt_multiplier: None,
             },
         )
         "#);
@@ -651,6 +668,7 @@ mod tests {
                         -1.5,
                     ),
                 ),
+                alt_multiplier: None,
             },
         )
         "#);
@@ -684,6 +702,7 @@ mod tests {
                         -1.0,
                     ),
                 ),
+                alt_multiplier: None,
             },
         )
         "#);
@@ -701,6 +720,7 @@ mod tests {
                     ),
                 ),
                 vertical: None,
+                alt_multiplier: None,
             },
         )
         "#);
@@ -712,6 +732,7 @@ mod tests {
             base: Some(FloatOrInt(2.0)),
             horizontal: None,
             vertical: None,
+            alt_multiplier: None,
         };
         assert_debug_snapshot!(sf.h_v_factors(), @r#"
         (
@@ -724,6 +745,7 @@ mod tests {
             base: None,
             horizontal: Some(FloatOrInt(3.0)),
             vertical: Some(FloatOrInt(-1.0)),
+            alt_multiplier: None,
         };
         assert_debug_snapshot!(sf.h_v_factors(), @r#"
         (
@@ -736,6 +758,7 @@ mod tests {
             base: Some(FloatOrInt(2.0)),
             horizontal: Some(FloatOrInt(1.0)),
             vertical: None,
+            alt_multiplier: None,
         };
         assert_debug_snapshot!(sf.h_v_factors(), @r"
         (

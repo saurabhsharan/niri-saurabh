@@ -38,6 +38,7 @@ input {
         natural-scroll
         // accel-speed 0.2
         // accel-profile "flat"
+        // scroll-factor 1.0 alt-multiplier=1.25
         // scroll-method "two-finger"
         // disabled-on-external-mouse
     }
@@ -47,6 +48,7 @@ input {
         // natural-scroll
         // accel-speed 0.2
         // accel-profile "flat"
+        // scroll-factor 1.0 alt-multiplier=1.25
         // scroll-method "no-scroll"
     }
 
