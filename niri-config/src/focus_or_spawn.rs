@@ -13,7 +13,9 @@ pub struct FocusOrSpawn(pub Vec<FocusOrSpawnEntry>);
 pub struct FocusOrSpawnEntry {
     pub trigger: Keysym,
     pub app_id: String,
-    pub action: Action,
+    pub spawn: Option<Action>,
+    pub cycle_all_workspaces: bool,
+    pub cycle_all_outputs: bool,
 }
 
 impl FocusOrSpawn {
@@ -98,9 +100,17 @@ where
         };
 
         let mut app_id = None;
+        let mut cycle_all_workspaces = false;
+        let mut cycle_all_outputs = false;
         for (name, val) in &node.properties {
             match &***name {
                 "app-id" => app_id = Some(knuffel::traits::DecodeScalar::decode(val, ctx)?),
+                "all-workspaces" => {
+                    cycle_all_workspaces = knuffel::traits::DecodeScalar::decode(val, ctx)?;
+                }
+                "all-outputs" => {
+                    cycle_all_outputs = knuffel::traits::DecodeScalar::decode(val, ctx)?;
+                }
                 name_str => {
                     ctx.emit_error(DecodeError::unexpected(
                         name,
@@ -114,9 +124,7 @@ where
             app_id.ok_or_else(|| DecodeError::missing(node, "missing required property `app-id`"))?;
 
         let mut children = node.children();
-        let child = children
-            .next()
-            .ok_or_else(|| DecodeError::missing(node, "expected a spawn or spawn-sh action"))?;
+        let child = children.next();
         for unwanted_child in children {
             ctx.emit_error(DecodeError::unexpected(
                 unwanted_child,
@@ -125,19 +133,27 @@ where
             ));
         }
 
-        let action = Action::decode_node(child, ctx)?;
-        if !matches!(action, Action::Spawn(_) | Action::SpawnSh(_)) {
-            return Err(DecodeError::unexpected(
-                child,
-                "action",
-                "focus-or-spawn entries only support spawn or spawn-sh",
-            ));
-        }
+        let spawn = match child {
+            Some(child) => {
+                let action = Action::decode_node(child, ctx)?;
+                if !matches!(action, Action::Spawn(_) | Action::SpawnSh(_)) {
+                    return Err(DecodeError::unexpected(
+                        child,
+                        "action",
+                        "focus-or-spawn entries only support spawn or spawn-sh",
+                    ));
+                }
+                Some(action)
+            }
+            None => None,
+        };
 
         Ok(Self {
             trigger,
             app_id,
-            action,
+            spawn,
+            cycle_all_workspaces,
+            cycle_all_outputs,
         })
     }
 }

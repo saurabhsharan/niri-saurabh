@@ -432,22 +432,37 @@ focus-or-spawn {
         spawn "google-chrome-stable";
     }
 
-    I app-id="com.mitchellh.ghostty" {
+    I app-id="com.mitchellh.ghostty" all-workspaces=true all-outputs=true {
         spawn "ghostty";
     }
+
+    M app-id="thunderbird"
 }
 ```
 
 Each entry needs:
 
 - an `app-id` property used to find matching windows;
-- exactly one `spawn` or `spawn-sh` action used to launch the app if no matching window exists.
+- at most one `spawn` or `spawn-sh` child action; if omitted, the entry will never launch.
+
+Each entry can also set:
+
+- `all-workspaces=true` to cycle across all workspaces within the selected output scope;
+- `all-outputs=true` to cycle across all outputs instead of only the current one.
+
+The cycle scope defaults to the current workspace on the current output.
+If you set `all-outputs=true` but leave `all-workspaces=false`, cycling uses the active workspace on
+each output.
 
 When you press one of these shortcuts, niri will:
 
-- launch the app if no matching window exists;
+- launch the app if no matching window exists and the entry has a `spawn` or `spawn-sh` child;
 - focus the most recently focused matching window if the app exists but is not currently focused;
-- cycle to the next matching window if the currently focused window already belongs to that app;
+- cycle to the next matching window if the currently focused window already belongs to that app,
+  using the configured cycle scope;
 - do nothing if the focused window is the only matching window.
 
+The cycle scope only affects cycling.
+If the app exists but is not currently focused, niri will still focus the most recently focused
+matching window from anywhere.
 Cycling order is stable but not MRU-based.
