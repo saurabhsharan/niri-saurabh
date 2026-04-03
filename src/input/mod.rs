@@ -3451,8 +3451,10 @@ impl State {
             .unwrap_or(1.);
 
         // Determine final scroll factors based on configuration
+        let alt_pressed = modifiers_from_state(self.niri.seat.get_keyboard().unwrap().modifier_state())
+            .contains(Modifiers::ALT);
         let (horizontal_factor, vertical_factor) = device_scroll_factor
-            .map(|x| x.h_v_factors())
+            .map(|x| x.h_v_factors_with_alt(alt_pressed))
             .unwrap_or((1.0, 1.0));
         let (horizontal_factor, vertical_factor) = (
             horizontal_factor * window_scroll_factor,

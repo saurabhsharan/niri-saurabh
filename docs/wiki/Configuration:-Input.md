@@ -36,8 +36,8 @@ input {
         natural-scroll
         // accel-speed 0.2
         // accel-profile "flat"
-        // scroll-factor 1.0
-        // scroll-factor vertical=1.0 horizontal=-2.0
+        // scroll-factor 1.0 alt-multiplier=1.25
+        // scroll-factor vertical=1.0 horizontal=-2.0 alt-multiplier=1.25
         // scroll-method "two-finger"
         // scroll-button 273
         // scroll-button-lock
@@ -53,8 +53,8 @@ input {
         // natural-scroll
         // accel-speed 0.2
         // accel-profile "flat"
-        // scroll-factor 1.0
-        // scroll-factor vertical=1.0 horizontal=-2.0
+        // scroll-factor 1.0 alt-multiplier=1.25
+        // scroll-factor vertical=1.0 horizontal=-2.0 alt-multiplier=1.25
         // scroll-method "no-scroll"
         // scroll-button 273
         // scroll-button-lock
@@ -256,6 +256,8 @@ Settings specific to `touchpad` and `mouse`:
 - `scroll-factor`: <sup>Since: 0.1.10</sup> scales the scrolling speed by this value.
 
     <sup>Since: 25.08</sup> You can also override horizontal and vertical scroll factor separately like so: `scroll-factor horizontal=2.0 vertical=-1.0`
+
+    You can also set `alt-multiplier=` to multiply the configured scroll factor while holding `Alt`. It defaults to `1.0`, which disables the feature unless you opt in. Example: `scroll-factor horizontal=2.0 vertical=-1.0 alt-multiplier=1.25`
 
 Settings specific to `tablet` and `touch`:
 
