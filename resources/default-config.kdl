@@ -507,9 +507,12 @@ binds {
     // Mod+TouchpadScrollUp   { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02-"; }
     //
     // You can also bind keys to emit synthetic continuous scroll events while
-    // held down.
+    // held down. You can optionally pass the speed in logical pixels per
+    // second; the default is 150.
     // Ctrl+S { keyboard-scroll-down; }
     // Ctrl+Q { keyboard-scroll-up; }
+    // Ctrl+Shift+S { keyboard-scroll-down speed=300; }
+    // Ctrl+Shift+Q { keyboard-scroll-up speed=300; }
 
     // You can refer to workspaces by index. However, keep in mind that
     // niri is a dynamic workspace system, so these commands are kind of

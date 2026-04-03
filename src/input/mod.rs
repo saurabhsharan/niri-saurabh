@@ -40,7 +40,7 @@ use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerCons
 use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
 use touch_overview_grab::TouchOverviewGrab;
 
-use self::keyboard_scroll::KeyboardScrollDirection;
+use self::keyboard_scroll::{KeyboardScrollDirection, DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND};
 use self::move_grab::MoveGrab;
 use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
@@ -564,7 +564,7 @@ impl State {
     fn start_key_repeat(&mut self, bind: Bind) {
         if matches!(
             bind.action,
-            Action::KeyboardScrollUp | Action::KeyboardScrollDown
+            Action::KeyboardScrollUp(_) | Action::KeyboardScrollDown(_)
         ) {
             return;
         }
@@ -886,11 +886,15 @@ impl State {
                     self.focus_window(&window);
                 }
             }
-            Action::KeyboardScrollUp => {
-                self.start_keyboard_scroll(KeyboardScrollDirection::Up);
+            Action::KeyboardScrollUp(speed) => {
+                let speed =
+                    speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Up, speed);
             }
-            Action::KeyboardScrollDown => {
-                self.start_keyboard_scroll(KeyboardScrollDirection::Down);
+            Action::KeyboardScrollDown(speed) => {
+                let speed =
+                    speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Down, speed);
             }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();

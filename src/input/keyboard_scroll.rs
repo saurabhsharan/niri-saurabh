@@ -8,7 +8,7 @@ use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
 const KEYBOARD_SCROLL_INTERVAL: Duration = Duration::from_nanos(8_333_333);
-const KEYBOARD_SCROLL_PIXELS_PER_SECOND: f64 = 1800.;
+pub const DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND: f64 = 150.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyboardScrollDirection {
@@ -28,13 +28,15 @@ impl KeyboardScrollDirection {
 #[derive(Debug, Clone, Copy)]
 pub struct ActiveKeyboardScroll {
     pub direction: KeyboardScrollDirection,
+    pub speed: f64,
     pub last_tick_time: Duration,
 }
 
 impl State {
-    pub(super) fn start_keyboard_scroll(&mut self, direction: KeyboardScrollDirection) {
+    pub(super) fn start_keyboard_scroll(&mut self, direction: KeyboardScrollDirection, speed: f64) {
         self.niri.active_keyboard_scroll = Some(ActiveKeyboardScroll {
             direction,
+            speed,
             // Prime the first immediate tick with one interval's worth of scroll.
             last_tick_time: get_monotonic_time().saturating_sub(KEYBOARD_SCROLL_INTERVAL),
         });
@@ -87,9 +89,7 @@ impl State {
             return;
         }
 
-        let amount = scroll
-            .direction
-            .amount(KEYBOARD_SCROLL_PIXELS_PER_SECOND * delta.as_secs_f64());
+        let amount = scroll.direction.amount(scroll.speed * delta.as_secs_f64());
 
         let pointer = self.niri.seat.get_pointer().unwrap();
         let frame = AxisFrame::new(now.as_millis() as u32)
