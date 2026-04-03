@@ -862,6 +862,7 @@ impl XdgShellHandler for State {
         let was_active = active_window == Some(&window);
 
         self.niri.window_mru_ui.remove_window(id);
+        let pip_outputs = self.niri.pip_manager.remove_by_source(id);
         self.niri.layout.remove_window(&window, transaction.clone());
 
         let surface = surface.wl_surface();
@@ -886,6 +887,9 @@ impl XdgShellHandler for State {
         if let Some(output) = output {
             self.niri.queue_redraw(&output);
             self.niri.queue_redraw_mru_output();
+        }
+        for output in pip_outputs {
+            self.niri.queue_redraw(&output);
         }
     }
 

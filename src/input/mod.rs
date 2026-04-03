@@ -42,6 +42,7 @@ use touch_overview_grab::TouchOverviewGrab;
 
 use self::keyboard_scroll::{KeyboardScrollDirection, DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND};
 use self::move_grab::MoveGrab;
+use self::pip_grab::PipPointerGrab;
 use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
 #[cfg(feature = "dbus")]
@@ -50,6 +51,7 @@ use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
+use crate::ui::pip::PipHitTarget;
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, with_toplevel_role, CastSessionId, ResizeEdge};
@@ -60,6 +62,7 @@ pub mod keyboard_scroll;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
+pub mod pip_grab;
 pub mod resize_grab;
 pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
@@ -71,6 +74,7 @@ pub mod touch_resize_grab;
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
 
 pub const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(400);
+const PIP_SCROLL_RESIZE_STEP: f64 = 1.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TabletData {
@@ -831,6 +835,14 @@ impl State {
                             warn!("error taking screenshot: {err:?}");
                         }
                     });
+                }
+            }
+            Action::MakeWindowThumbnailPip => {
+                if let Some((mapped, output)) = self.niri.layout.focus_with_output() {
+                    let output = output.clone();
+                    for output in self.niri.pip_manager.toggle_pip(mapped, &output) {
+                        self.niri.queue_redraw(&output);
+                    }
                 }
             }
             Action::ToggleKeyboardShortcutsInhibit => {
@@ -2443,6 +2455,99 @@ impl State {
         }
     }
 
+    fn update_pip_hover(&mut self, pos: Option<Point<f64, Logical>>) {
+        let hover = match pos {
+            Some(pos) => self
+                .niri
+                .output_under(pos)
+                .map(|(output, pos_within_output)| (output.clone(), pos_within_output)),
+            None => None,
+        };
+        if self.niri.pip_manager.update_hover(hover) {
+            self.niri.queue_redraw_all();
+        }
+        self.update_pip_cursor(pos);
+    }
+
+    fn pip_hit_at(
+        &self,
+        pos: Point<f64, Logical>,
+    ) -> Option<(Output, Point<f64, Logical>, crate::ui::pip::PipHit)> {
+        if !self.niri.pips_are_visible() {
+            return None;
+        }
+
+        let (output, pos_within_output) = self.niri.output_under(pos)?;
+        let output = output.clone();
+        let hit = self.niri.pip_manager.hit_test(&output, pos_within_output)?;
+        Some((output, pos_within_output, hit))
+    }
+
+    fn update_pip_cursor(&mut self, pos: Option<Point<f64, Logical>>) {
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() {
+            return;
+        }
+        drop(pointer);
+
+        let desired =
+            pos.and_then(|pos| self.pip_hit_at(pos))
+                .map(|(_, _, hit)| match hit.target {
+                    PipHitTarget::Resize(edges) => CursorImageStatus::Named(edges.cursor_icon()),
+                    PipHitTarget::Body | PipHitTarget::CloseButton => {
+                        CursorImageStatus::default_named()
+                    }
+                });
+
+        match desired {
+            Some(image) => self.niri.cursor_manager.set_cursor_image(image),
+            None if is_pip_resize_cursor(self.niri.cursor_manager.cursor_image()) => self
+                .niri
+                .cursor_manager
+                .set_cursor_image(CursorImageStatus::default_named()),
+            None => {}
+        }
+    }
+
+    fn resize_pip_from_scroll(
+        &mut self,
+        pos: Point<f64, Logical>,
+        horizontal_amount: Option<f64>,
+        vertical_amount: Option<f64>,
+        horizontal_amount_v120: Option<f64>,
+        vertical_amount_v120: Option<f64>,
+    ) -> bool {
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() {
+            return false;
+        }
+        drop(pointer);
+
+        let Some((output, _, hit)) = self.pip_hit_at(pos) else {
+            return false;
+        };
+
+        let steps = pip_scroll_resize_steps(
+            horizontal_amount,
+            vertical_amount,
+            horizontal_amount_v120,
+            vertical_amount_v120,
+        );
+        if steps != 0. {
+            let factor = PIP_SCROLL_RESIZE_STEP.powf(steps);
+            if self
+                .niri
+                .pip_manager
+                .resize_by_factor(hit.id, factor)
+                .is_some()
+            {
+                self.niri.queue_redraw(&output);
+            }
+        }
+
+        true
+    }
+
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
         let was_inside_hot_corner = self.niri.pointer_inside_hot_corner;
         // Any of the early returns here mean that the pointer is not inside the hot corner.
@@ -2599,6 +2704,8 @@ impl State {
             }
         }
 
+        self.update_pip_hover(Some(new_pos));
+
         let under = self.niri.contents_under(new_pos);
 
         // Handle confined pointer.
@@ -2736,6 +2843,8 @@ impl State {
             }
         }
 
+        self.update_pip_hover(Some(pos));
+
         let under = self.niri.contents_under(pos);
 
         self.niri.handle_focus_follows_mouse(&under);
@@ -2832,6 +2941,74 @@ impl State {
 
                     self.niri.suppressed_buttons.insert(button_code);
                     return;
+                }
+            }
+
+            if button == Some(MouseButton::Left) && !pointer.is_grabbed() {
+                let location = pointer.current_location();
+                let under = self.niri.contents_under(location);
+
+                if under.surface.is_none() && !under.hot_corner {
+                    if let Some((output, pos_within_output)) = self.niri.output_under(location) {
+                        let output = output.clone();
+                        if let Some((_, _, hit)) = self.pip_hit_at(location) {
+                            self.niri.pointer_visibility = PointerVisibility::Visible;
+                            self.niri.tablet_cursor_location = None;
+
+                            if self.niri.pip_manager.raise_to_top(hit.id) {
+                                self.niri.queue_redraw(&output);
+                            }
+
+                            match hit.target {
+                                PipHitTarget::CloseButton => {
+                                    for output in self.niri.pip_manager.remove(hit.id) {
+                                        self.niri.queue_redraw(&output);
+                                    }
+                                    self.niri.suppressed_buttons.insert(button_code);
+                                }
+                                PipHitTarget::Resize(edges) => {
+                                    let start_data = PointerGrabStartData {
+                                        focus: None,
+                                        button: button_code,
+                                        location,
+                                    };
+                                    let grab = PipPointerGrab::new_resize(
+                                        start_data,
+                                        hit.id,
+                                        output.clone(),
+                                        edges,
+                                    );
+                                    pointer.set_grab(self, grab, serial, Focus::Clear);
+                                    self.niri.cursor_manager.set_cursor_image(
+                                        CursorImageStatus::Named(edges.cursor_icon()),
+                                    );
+                                    self.niri.queue_redraw(&output);
+                                }
+                                PipHitTarget::Body => {
+                                    if let Some(pip) = self.niri.pip_manager.find(hit.id) {
+                                        let grab_offset = pos_within_output - pip.position;
+                                        let start_data = PointerGrabStartData {
+                                            focus: None,
+                                            button: button_code,
+                                            location,
+                                        };
+                                        let grab = PipPointerGrab::new_move(
+                                            start_data,
+                                            hit.id,
+                                            output.clone(),
+                                            grab_offset,
+                                        );
+                                        pointer.set_grab(self, grab, serial, Focus::Clear);
+                                        self.niri.cursor_manager.set_cursor_image(
+                                            CursorImageStatus::Named(CursorIcon::Grabbing),
+                                        );
+                                        self.niri.queue_redraw(&output);
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -3130,6 +3307,18 @@ impl State {
 
         let horizontal_amount_v120 = event.amount_v120(Axis::Horizontal);
         let vertical_amount_v120 = event.amount_v120(Axis::Vertical);
+        let horizontal_amount = event.amount(Axis::Horizontal);
+        let vertical_amount = event.amount(Axis::Vertical);
+
+        if self.resize_pip_from_scroll(
+            pointer.current_location(),
+            horizontal_amount,
+            vertical_amount,
+            horizontal_amount_v120,
+            vertical_amount_v120,
+        ) {
+            return;
+        }
 
         let is_overview_open = self.niri.layout.is_overview_open();
 
@@ -3315,9 +3504,6 @@ impl State {
                 self.niri.vertical_wheel_tracker.reset();
             }
         }
-
-        let horizontal_amount = event.amount(Axis::Horizontal);
-        let vertical_amount = event.amount(Axis::Vertical);
 
         // Handle touchpad scroll bindings.
         if source == AxisSource::Finger {
@@ -3592,6 +3778,8 @@ impl State {
                 }
             }
         }
+
+        self.update_pip_hover(Some(pos));
 
         let under = self.niri.contents_under(pos);
 
@@ -5175,6 +5363,40 @@ pub fn mods_with_finger_scroll_binds(mod_key: ModKey, binds: &Binds) -> HashSet<
             Trigger::TouchpadScrollLeft,
             Trigger::TouchpadScrollRight,
         ],
+    )
+}
+
+fn pip_scroll_resize_steps(
+    horizontal_amount: Option<f64>,
+    vertical_amount: Option<f64>,
+    horizontal_amount_v120: Option<f64>,
+    vertical_amount_v120: Option<f64>,
+) -> f64 {
+    if let Some(v120) = vertical_amount_v120.filter(|v| *v != 0.) {
+        return -v120 / 120.;
+    }
+    if let Some(amount) = vertical_amount.filter(|v| *v != 0.) {
+        return -amount / 15.;
+    }
+    if let Some(v120) = horizontal_amount_v120.filter(|v| *v != 0.) {
+        return -v120 / 120.;
+    }
+    if let Some(amount) = horizontal_amount.filter(|v| *v != 0.) {
+        return -amount / 15.;
+    }
+
+    0.
+}
+
+fn is_pip_resize_cursor(cursor: &CursorImageStatus) -> bool {
+    matches!(
+        cursor,
+        CursorImageStatus::Named(
+            CursorIcon::NwResize
+                | CursorIcon::NeResize
+                | CursorIcon::SeResize
+                | CursorIcon::SwResize
+        )
     )
 }
 

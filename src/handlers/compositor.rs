@@ -292,6 +292,7 @@ impl CompositorHandler for State {
                         .stop_casts_for_target(CastTarget::Window { id: id.get() });
 
                     self.niri.window_mru_ui.remove_window(id);
+                    let pip_outputs = self.niri.pip_manager.remove_by_source(id);
                     self.niri.layout.remove_window(&window, transaction.clone());
                     self.add_default_dmabuf_pre_commit_hook(surface);
 
@@ -313,6 +314,9 @@ impl CompositorHandler for State {
                     if let Some(output) = output {
                         self.niri.queue_redraw(&output);
                         self.niri.queue_redraw_mru_output();
+                    }
+                    for output in pip_outputs {
+                        self.niri.queue_redraw(&output);
                     }
                     return;
                 }
@@ -339,8 +343,10 @@ impl CompositorHandler for State {
                 }
 
                 // The toplevel remains mapped.
+                let mapped_size = window.geometry().size;
                 self.niri.window_mru_ui.update_window(&self.niri.layout, id);
                 self.niri.layout.update_window(&window, serial);
+                self.niri.pip_manager.refresh_source_size(id, mapped_size);
 
                 // Move the toplevel according to the attach offset.
                 if let Some(delta) = buffer_delta {
@@ -362,6 +368,7 @@ impl CompositorHandler for State {
                     self.niri.queue_redraw(&output);
                     self.niri.queue_redraw_mru_output();
                 }
+                self.niri.queue_redraw_pips_for_source(id);
                 return;
             }
 
@@ -373,15 +380,21 @@ impl CompositorHandler for State {
         if let Some((mapped, output)) = root_window_output {
             let window = mapped.window.clone();
             let output = output.cloned();
+            let mapped_id = mapped.id();
             window.on_commit();
+            let mapped_size = window.geometry().size;
             self.niri
                 .window_mru_ui
-                .update_window(&self.niri.layout, mapped.id());
+                .update_window(&self.niri.layout, mapped_id);
             self.niri.layout.update_window(&window, None);
+            self.niri
+                .pip_manager
+                .refresh_source_size(mapped_id, mapped_size);
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
                 self.niri.queue_redraw_mru_output();
             }
+            self.niri.queue_redraw_pips_for_source(mapped_id);
             return;
         }
 
