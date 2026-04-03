@@ -40,6 +40,7 @@ use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerCons
 use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
 use touch_overview_grab::TouchOverviewGrab;
 
+use self::keyboard_scroll::KeyboardScrollDirection;
 use self::move_grab::MoveGrab;
 use self::pick_color_grab::PickColorGrab;
 use self::pick_window_grab::PickWindowGrab;
@@ -56,6 +57,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
+pub mod keyboard_scroll;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -382,6 +384,8 @@ impl State {
         // But it's good enough for now.
         // FIXME: handle this properly.
         if !pressed {
+            self.stop_keyboard_scroll();
+
             if let Some(token) = self.niri.bind_repeat_timer.take() {
                 self.niri.event_loop.remove(token);
             }
@@ -559,6 +563,13 @@ impl State {
     }
 
     fn start_key_repeat(&mut self, bind: Bind) {
+        if matches!(
+            bind.action,
+            Action::KeyboardScrollUp | Action::KeyboardScrollDown
+        ) {
+            return;
+        }
+
         if !bind.repeat {
             return;
         }
@@ -667,11 +678,13 @@ impl State {
                 self.niri.stop_signal.stop()
             }
             Action::ChangeVt(vt) => {
+                self.stop_keyboard_scroll();
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
             }
             Action::Suspend => {
+                self.stop_keyboard_scroll();
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
@@ -873,6 +886,12 @@ impl State {
 
                     self.focus_window(&window);
                 }
+            }
+            Action::KeyboardScrollUp => {
+                self.start_keyboard_scroll(KeyboardScrollDirection::Up);
+            }
+            Action::KeyboardScrollDown => {
+                self.start_keyboard_scroll(KeyboardScrollDirection::Down);
             }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();
