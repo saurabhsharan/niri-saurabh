@@ -109,7 +109,9 @@ binds {
 
 You can also bind keyboard keys to emit synthetic continuous scroll events while held.
 This is useful for compositor-native page-style scrolling that works in apps with a scroll view.
-You can optionally pass the scroll speed with `speed=...`, in logical pixels per second. If omitted, the default is `150`.
+You can optionally pass the scroll speed with `speed=...`, in logical pixels per second.
+You can also set `decay=false` to disable the short decay tail after key release.
+If omitted, the built-in defaults are used.
 
 ```kdl
 binds {
@@ -119,6 +121,10 @@ binds {
     // Custom speed for both directions.
     Ctrl+Shift+S { keyboard-scroll-down speed=300; }
     Ctrl+Shift+Q { keyboard-scroll-up speed=300; }
+
+    // Disable the release decay.
+    Ctrl+Alt+S { keyboard-scroll-down decay=false; }
+    Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
 }
 ```
 
@@ -356,7 +362,11 @@ niri msg action do-screen-transition --delay-ms 100
 Emit synthetic continuous scroll events while the key is held down.
 
 This can be used as a compositor-native page scrolling bind that works in applications with a scroll view, without depending on the application supporting a specific keyboard shortcut.
-You can optionally pass the scroll speed with `speed=...`, in logical pixels per second. If omitted, the default is `150`.
+You can optionally pass the scroll speed with `speed=...`, in logical pixels per second.
+You can also set `decay=false` to disable the short decay tail after key release.
+By default, decay is enabled.
+The decay curve itself is fixed and does not change with `speed`, but a higher `speed` starts that decay from a higher velocity, so it will usually scroll farther and take a bit longer to come to a stop.
+Decay only applies to key release; focus/output/target changes still stop scrolling immediately.
 This action is only available from the `binds {}` config and is not exposed through `niri msg action`.
 
 ```kdl
@@ -367,6 +377,10 @@ binds {
     // Custom speed for both directions.
     Ctrl+Shift+S { keyboard-scroll-down speed=1200; }
     Ctrl+Shift+Q { keyboard-scroll-up speed=1200; }
+
+    // Disable the release decay.
+    Ctrl+Alt+S { keyboard-scroll-down decay=false; }
+    Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
 }
 ```
 

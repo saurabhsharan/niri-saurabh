@@ -381,7 +381,9 @@ impl State {
         // But it's good enough for now.
         // FIXME: handle this properly.
         if !pressed {
-            self.stop_keyboard_scroll();
+            // This is the normal key-release path, so use the release-aware stop that can apply
+            // the optional decay tail instead of always terminating immediately.
+            self.stop_keyboard_scroll_on_release();
 
             if let Some(token) = self.niri.bind_repeat_timer.take() {
                 self.niri.event_loop.remove(token);
@@ -564,7 +566,7 @@ impl State {
     fn start_key_repeat(&mut self, bind: Bind) {
         if matches!(
             bind.action,
-            Action::KeyboardScrollUp(_) | Action::KeyboardScrollDown(_)
+            Action::KeyboardScrollUp(_, _) | Action::KeyboardScrollDown(_, _)
         ) {
             return;
         }
@@ -677,13 +679,17 @@ impl State {
                 self.niri.stop_signal.stop()
             }
             Action::ChangeVt(vt) => {
-                self.stop_keyboard_scroll();
+                // VT switches can interrupt delivery of the real key release, so force an
+                // immediate stop instead of waiting for release-time decay behavior.
+                self.stop_keyboard_scroll_immediately();
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
             }
             Action::Suspend => {
-                self.stop_keyboard_scroll();
+                // Suspend can also bypass the usual key-release path, so stop immediately rather
+                // than letting the synthetic scroll decay after the compositor is interrupted.
+                self.stop_keyboard_scroll_immediately();
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
@@ -886,15 +892,15 @@ impl State {
                     self.focus_window(&window);
                 }
             }
-            Action::KeyboardScrollUp(speed) => {
+            Action::KeyboardScrollUp(speed, decay) => {
                 let speed =
                     speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
-                self.start_keyboard_scroll(KeyboardScrollDirection::Up, speed);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Up, speed, decay);
             }
-            Action::KeyboardScrollDown(speed) => {
+            Action::KeyboardScrollDown(speed, decay) => {
                 let speed =
                     speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
-                self.start_keyboard_scroll(KeyboardScrollDirection::Down, speed);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Down, speed, decay);
             }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();
