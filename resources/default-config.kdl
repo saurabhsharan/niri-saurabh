@@ -505,6 +505,11 @@ binds {
     // touchpads by default.
     // Mod+TouchpadScrollDown { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02+"; }
     // Mod+TouchpadScrollUp   { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02-"; }
+    //
+    // You can also bind keys to emit synthetic continuous scroll events while
+    // held down.
+    // Ctrl+S { keyboard-scroll-down; }
+    // Ctrl+Q { keyboard-scroll-up; }
 
     // You can refer to workspaces by index. However, keep in mind that
     // niri is a dynamic workspace system, so these commands are kind of

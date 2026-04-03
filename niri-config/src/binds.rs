@@ -157,6 +157,8 @@ pub enum Action {
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
+    KeyboardScrollUp,
+    KeyboardScrollDown,
     FocusColumnLeft,
     #[knuffel(skip)]
     FocusColumnLeftUnderMouse,

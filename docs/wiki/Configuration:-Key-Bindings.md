@@ -107,6 +107,16 @@ binds {
 }
 ```
 
+You can also bind keyboard keys to emit synthetic continuous scroll events while held.
+This is useful for compositor-native page-style scrolling that works in apps with a scroll view.
+
+```kdl
+binds {
+    Ctrl+S { keyboard-scroll-down; }
+    Ctrl+Q { keyboard-scroll-up; }
+}
+```
+
 Both mouse wheel and touchpad scroll binds will prevent applications from receiving any scroll events when their modifiers are held down.
 For example, if you have a `Mod+WheelScrollDown` bind, then while holding `Mod`, all mouse wheel scrolling will be consumed by niri.
 
@@ -334,6 +344,19 @@ Or, in scripts:
 
 ```shell
 niri msg action do-screen-transition --delay-ms 100
+```
+
+#### `keyboard-scroll-up`, `keyboard-scroll-down`
+
+Emit synthetic continuous scroll events while the key is held down.
+
+This can be used as a compositor-native page scrolling bind that works in applications with a scroll view, without depending on the application supporting a specific keyboard shortcut.
+
+```kdl
+binds {
+    Ctrl+S { keyboard-scroll-down; }
+    Ctrl+Q { keyboard-scroll-up; }
+}
 ```
 
 #### `toggle-window-rule-opacity`
