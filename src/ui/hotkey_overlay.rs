@@ -462,6 +462,8 @@ fn action_name(action: &Action) -> String {
         Action::CloseWindow => String::from("Close Focused Window"),
         Action::FocusColumnLeft => String::from("Focus Column to the Left"),
         Action::FocusColumnRight => String::from("Focus Column to the Right"),
+        Action::KeyboardScrollUp(_, _) => String::from("Scroll Up"),
+        Action::KeyboardScrollDown(_, _) => String::from("Scroll Down"),
         Action::MoveColumnLeft => String::from("Move Column Left"),
         Action::MoveColumnRight => String::from("Move Column Right"),
         Action::FocusWorkspaceDown => String::from("Switch Workspace Down"),

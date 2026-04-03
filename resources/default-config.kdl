@@ -505,6 +505,19 @@ binds {
     // touchpads by default.
     // Mod+TouchpadScrollDown { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02+"; }
     // Mod+TouchpadScrollUp   { spawn-sh "wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.02-"; }
+    //
+    // You can also bind keys to emit synthetic continuous scroll events while
+    // held down. You can optionally pass the speed in logical pixels per
+    // second, and set decay=false to disable the release decay tail. The
+    // decay curve itself stays the same regardless of speed, but higher
+    // speeds will decay from a higher starting velocity and therefore
+    // usually travel farther before stopping.
+    // Ctrl+S { keyboard-scroll-down; }
+    // Ctrl+Q { keyboard-scroll-up; }
+    // Ctrl+Shift+S { keyboard-scroll-down speed=300; }
+    // Ctrl+Shift+Q { keyboard-scroll-up speed=300; }
+    // Ctrl+Alt+S { keyboard-scroll-down decay=false; }
+    // Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
 
     // You can refer to workspaces by index. However, keep in mind that
     // niri is a dynamic workspace system, so these commands are kind of

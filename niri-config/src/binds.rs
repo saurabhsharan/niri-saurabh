@@ -14,6 +14,7 @@ use smithay::input::keyboard::Keysym;
 
 use crate::recent_windows::{MruDirection, MruFilter, MruScope};
 use crate::utils::{expect_only_children, MergeWith};
+use crate::FloatOrInt;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
@@ -157,6 +158,14 @@ pub enum Action {
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
+    KeyboardScrollUp(
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
+        #[knuffel(property(name = "decay"), default = true)] bool,
+    ),
+    KeyboardScrollDown(
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
+        #[knuffel(property(name = "decay"), default = true)] bool,
+    ),
     FocusColumnLeft,
     #[knuffel(skip)]
     FocusColumnLeftUnderMouse,

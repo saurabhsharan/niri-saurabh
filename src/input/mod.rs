@@ -40,6 +40,7 @@ use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerCons
 use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
 use touch_overview_grab::TouchOverviewGrab;
 
+use self::keyboard_scroll::{KeyboardScrollDirection, DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND};
 use self::move_grab::MoveGrab;
 use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
@@ -54,6 +55,7 @@ use crate::utils::spawning::{spawn, spawn_sh};
 use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
+pub mod keyboard_scroll;
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -379,6 +381,10 @@ impl State {
         // But it's good enough for now.
         // FIXME: handle this properly.
         if !pressed {
+            // This is the normal key-release path, so use the release-aware stop that can apply
+            // the optional decay tail instead of always terminating immediately.
+            self.stop_keyboard_scroll_on_release();
+
             if let Some(token) = self.niri.bind_repeat_timer.take() {
                 self.niri.event_loop.remove(token);
             }
@@ -558,6 +564,13 @@ impl State {
     }
 
     fn start_key_repeat(&mut self, bind: Bind) {
+        if matches!(
+            bind.action,
+            Action::KeyboardScrollUp(_, _) | Action::KeyboardScrollDown(_, _)
+        ) {
+            return;
+        }
+
         if !bind.repeat {
             return;
         }
@@ -666,11 +679,17 @@ impl State {
                 self.niri.stop_signal.stop()
             }
             Action::ChangeVt(vt) => {
+                // VT switches can interrupt delivery of the real key release, so force an
+                // immediate stop instead of waiting for release-time decay behavior.
+                self.stop_keyboard_scroll_immediately();
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
             }
             Action::Suspend => {
+                // Suspend can also bypass the usual key-release path, so stop immediately rather
+                // than letting the synthetic scroll decay after the compositor is interrupted.
+                self.stop_keyboard_scroll_immediately();
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
@@ -872,6 +891,16 @@ impl State {
 
                     self.focus_window(&window);
                 }
+            }
+            Action::KeyboardScrollUp(speed, decay) => {
+                let speed =
+                    speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Up, speed, decay);
+            }
+            Action::KeyboardScrollDown(speed, decay) => {
+                let speed =
+                    speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
+                self.start_keyboard_scroll(KeyboardScrollDirection::Down, speed, decay);
             }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();
