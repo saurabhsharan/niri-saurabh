@@ -109,11 +109,16 @@ binds {
 
 You can also bind keyboard keys to emit synthetic continuous scroll events while held.
 This is useful for compositor-native page-style scrolling that works in apps with a scroll view.
+You can optionally pass the scroll speed with `speed=...`, in logical pixels per second. If omitted, the default is `150`.
 
 ```kdl
 binds {
     Ctrl+S { keyboard-scroll-down; }
     Ctrl+Q { keyboard-scroll-up; }
+
+    // Custom speed for both directions.
+    Ctrl+Shift+S { keyboard-scroll-down speed=300; }
+    Ctrl+Shift+Q { keyboard-scroll-up speed=300; }
 }
 ```
 
@@ -351,11 +356,17 @@ niri msg action do-screen-transition --delay-ms 100
 Emit synthetic continuous scroll events while the key is held down.
 
 This can be used as a compositor-native page scrolling bind that works in applications with a scroll view, without depending on the application supporting a specific keyboard shortcut.
+You can optionally pass the scroll speed with `speed=...`, in logical pixels per second. If omitted, the default is `150`.
+This action is only available from the `binds {}` config and is not exposed through `niri msg action`.
 
 ```kdl
 binds {
     Ctrl+S { keyboard-scroll-down; }
     Ctrl+Q { keyboard-scroll-up; }
+
+    // Custom speed for both directions.
+    Ctrl+Shift+S { keyboard-scroll-down speed=1200; }
+    Ctrl+Shift+Q { keyboard-scroll-up speed=1200; }
 }
 ```
 
