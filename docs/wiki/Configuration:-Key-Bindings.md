@@ -1,6 +1,7 @@
 ### Overview
 
-Key bindings are declared in the `binds {}` section of the config.
+Regular key bindings are declared in the `binds {}` section of the config.
+There is also a separate top-level `focus-or-spawn {}` section for hard-coded Right Alt app switching.
 
 > [!NOTE]
 > This is one of the few sections that *does not* get automatically filled with defaults if you omit it, so make sure to copy it from the default config.
@@ -416,3 +417,37 @@ binds {
     Super+Alt+L allow-inhibiting=false { spawn "swaylock"; }
 }
 ```
+
+### Focus-Or-Spawn
+
+`focus-or-spawn {}` is a separate top-level config section for Right Alt app switching.
+Each child node name is the key to press together with <kbd>Right Alt</kbd>.
+<kbd>Left Alt</kbd> does not trigger these bindings.
+This implementation assumes a fairly standard keyboard layout where Right Alt behaves like a plain
+Alt modifier, such as common US English laptop and desktop keyboards.
+
+```kdl
+focus-or-spawn {
+    C app-id="google-chrome" {
+        spawn "google-chrome-stable";
+    }
+
+    I app-id="com.mitchellh.ghostty" {
+        spawn "ghostty";
+    }
+}
+```
+
+Each entry needs:
+
+- an `app-id` property used to find matching windows;
+- exactly one `spawn` or `spawn-sh` action used to launch the app if no matching window exists.
+
+When you press one of these shortcuts, niri will:
+
+- launch the app if no matching window exists;
+- focus the most recently focused matching window if the app exists but is not currently focused;
+- cycle to the next matching window if the currently focused window already belongs to that app;
+- do nothing if the focused window is the only matching window.
+
+Cycling order is stable but not MRU-based.
