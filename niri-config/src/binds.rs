@@ -137,6 +137,7 @@ pub enum Action {
         // Path; not settable from knuffel
         Option<String>,
     ),
+    MakeWindowThumbnailPip,
     #[knuffel(skip)]
     ScreenshotWindowById {
         id: u64,
@@ -426,6 +427,7 @@ impl From<niri_ipc::Action> for Action {
                 show_pointer,
                 path,
             },
+            niri_ipc::Action::MakeWindowThumbnailPip {} => Self::MakeWindowThumbnailPip,
             niri_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
             }

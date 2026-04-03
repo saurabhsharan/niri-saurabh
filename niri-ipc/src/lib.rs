@@ -283,6 +283,8 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
     },
+    /// Toggle a Picture-in-Picture thumbnail for the focused window.
+    MakeWindowThumbnailPip {},
     /// Enable or disable the keyboard shortcuts inhibitor (if any) for the focused surface.
     ToggleKeyboardShortcutsInhibit {},
     /// Close a window.

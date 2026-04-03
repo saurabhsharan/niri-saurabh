@@ -169,6 +169,7 @@ use crate::ui::config_error_notification::ConfigErrorNotification;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
+use crate::ui::pip::{PipManager, PipRenderElement};
 use crate::ui::screen_transition::{self, ScreenTransition};
 use crate::ui::screenshot_ui::{OutputScreenshot, ScreenshotUi, ScreenshotUiRenderElement};
 use crate::utils::scale::{closest_representable_scale, guess_monitor_scale};
@@ -390,6 +391,7 @@ pub struct Niri {
     pub exit_confirm_dialog: ExitConfirmDialog,
 
     pub window_mru_ui: WindowMruUi,
+    pub pip_manager: PipManager,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -2601,6 +2603,7 @@ impl Niri {
             exit_confirm_dialog,
 
             window_mru_ui,
+            pip_manager: PipManager::new(),
             pending_mru_commit: None,
 
             pick_window: None,
@@ -2969,6 +2972,8 @@ impl Niri {
         if self.window_mru_ui.output() == Some(output) {
             self.cancel_mru();
         }
+
+        self.pip_manager.remove_by_output(output);
     }
 
     pub fn output_resized(&mut self, output: &Output) {
@@ -3017,6 +3022,8 @@ impl Niri {
                 return;
             }
         }
+
+        self.pip_manager.clamp_output(output);
 
         self.queue_redraw(output);
     }
@@ -3250,6 +3257,15 @@ impl Niri {
             return None;
         }
 
+        if self.pips_are_visible()
+            && self
+                .pip_manager
+                .pip_under(output, pos_within_output)
+                .is_some()
+        {
+            return None;
+        }
+
         if let Some((window, _loc)) = self
             .layout
             .interactive_moved_window_under(output, pos_within_output)
@@ -3272,6 +3288,10 @@ impl Niri {
     pub fn window_under_cursor(&self) -> Option<&Mapped> {
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.window_under(pos)
+    }
+
+    pub fn pips_are_visible(&self) -> bool {
+        !self.layout.is_overview_open()
     }
 
     /// Returns contents under the given point.
@@ -3401,6 +3421,16 @@ impl Niri {
 
         let mut under =
             layer_popup_under(Layer::Overlay).or_else(|| layer_toplevel_under(Layer::Overlay));
+
+        if under.is_none()
+            && self.pips_are_visible()
+            && self
+                .pip_manager
+                .pip_under(output, pos_within_output)
+                .is_some()
+        {
+            return rv;
+        }
 
         let is_overview_open = self.layout.is_overview_open();
 
@@ -4355,6 +4385,13 @@ impl Niri {
         // The overlay layer elements go next.
         push_popups_from_layer!(Layer::Overlay);
         push_normal_from_layer!(Layer::Overlay);
+
+        if self.pips_are_visible() {
+            self.pip_manager
+                .render_for_output(self, output, renderer, target, &mut |elem| {
+                    push(elem.into())
+                });
+        }
 
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
@@ -6457,6 +6494,12 @@ impl Niri {
             self.queue_redraw(&output);
         }
     }
+
+    pub fn queue_redraw_pips_for_source(&mut self, source: MappedId) {
+        for output in self.pip_manager.outputs_for_source(source) {
+            self.queue_redraw(&output);
+        }
+    }
 }
 
 pub struct NewClient {
@@ -6522,6 +6565,7 @@ niri_render_elements! {
         SolidColor = SolidColorRenderElement,
         ScreenshotUi = ScreenshotUiRenderElement,
         WindowMruUi = WindowMruUiRenderElement<R>,
+        Pip = PipRenderElement<R>,
         ExitConfirmDialog = ExitConfirmDialogRenderElement,
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
