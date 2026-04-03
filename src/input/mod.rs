@@ -4328,30 +4328,64 @@ impl State {
             return;
         };
 
-        let mut windows = self
-            .niri
-            .layout
-            .windows()
-            .filter(|(_, mapped)| {
-                focus_or_spawn_app_id(mapped).as_deref() == Some(entry.app_id.as_str())
-            })
-            .map(|(_, mapped)| (mapped.id(), mapped.window.clone(), mapped.get_focus_timestamp()))
-            .collect::<Vec<_>>();
+        let active_output = self.niri.layout.active_output().cloned();
+        let mut windows = Vec::new();
+        for (mon, ws_idx, ws) in self.niri.layout.workspaces() {
+            let on_current_output = match (mon, active_output.as_ref()) {
+                (Some(mon), Some(active_output)) => mon.output() == active_output,
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            let on_active_workspace = match mon {
+                Some(mon) => mon.active_workspace_idx() == ws_idx,
+                None => true,
+            };
+
+            for mapped in ws.windows() {
+                if focus_or_spawn_app_id(mapped).as_deref() != Some(entry.app_id.as_str()) {
+                    continue;
+                }
+
+                windows.push((
+                    mapped.id(),
+                    mapped.window.clone(),
+                    mapped.get_focus_timestamp(),
+                    on_current_output,
+                    on_active_workspace,
+                ));
+            }
+        }
 
         if windows.is_empty() {
-            self.do_action(entry.action, false);
+            if let Some(action) = entry.spawn {
+                self.do_action(action, false);
+            }
             return;
         }
 
         if let Some(current_id) = self.niri.layout.focus().map(|window| window.id()) {
-            if windows.iter().any(|(id, _, _)| *id == current_id) {
-                if windows.len() <= 1 {
+            if windows.iter().any(|(id, _, _, _, _)| *id == current_id) {
+                let mut cycle_windows = windows
+                    .into_iter()
+                    .filter(|(_, _, _, on_current_output, on_active_workspace)| {
+                        (entry.cycle_all_outputs || *on_current_output)
+                            && (entry.cycle_all_workspaces || *on_active_workspace)
+                    })
+                    .collect::<Vec<_>>();
+
+                if cycle_windows.len() <= 1 {
                     return;
                 }
 
-                windows.sort_by_key(|(id, _, _)| id.get());
-                let current_idx = windows.iter().position(|(id, _, _)| *id == current_id).unwrap();
-                let next_window = windows[(current_idx + 1) % windows.len()].1.clone();
+                cycle_windows.sort_by_key(|(id, _, _, _, _)| id.get());
+                let Some(current_idx) = cycle_windows
+                    .iter()
+                    .position(|(id, _, _, _, _)| *id == current_id)
+                else {
+                    return;
+                };
+                let next_window =
+                    cycle_windows[(current_idx + 1) % cycle_windows.len()].1.clone();
                 self.focus_window(&next_window);
                 return;
             }
@@ -4359,8 +4393,8 @@ impl State {
 
         if let Some(target_window) = windows
             .into_iter()
-            .max_by_key(|(_, _, focus_timestamp)| *focus_timestamp)
-            .map(|(_, window, _)| window)
+            .max_by_key(|(_, _, focus_timestamp, _, _)| *focus_timestamp)
+            .map(|(_, window, _, _, _)| window)
         {
             self.focus_window(&target_window);
         }
