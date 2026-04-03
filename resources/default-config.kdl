@@ -640,3 +640,23 @@ binds {
     // moving the mouse or pressing any other key.
     Mod+Shift+P { power-off-monitors; }
 }
+
+// Right Alt app switching lives in a separate top-level section.
+// Each child node name is the key to press with Right Alt.
+// Match windows by app-id, and launch them with spawn or spawn-sh if needed.
+// Omit the spawn/spawn-sh child entirely to disable launching for an entry.
+// Set `all-workspaces=true` and/or `all-outputs=true` to widen cycling scope.
+// This assumes a fairly standard keyboard layout where Right Alt behaves like
+// a plain Alt modifier, such as common US English laptop and desktop keyboards.
+// (This example section is commented out with a "/-" in front.)
+/-focus-or-spawn {
+    C app-id="google-chrome" {
+        spawn "google-chrome-stable";
+    }
+
+    I app-id="com.mitchellh.ghostty" all-workspaces=true all-outputs=true {
+        spawn "ghostty";
+    }
+
+    M app-id="thunderbird"
+}

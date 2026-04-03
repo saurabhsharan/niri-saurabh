@@ -52,7 +52,8 @@ use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
-use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
+use crate::utils::{center, get_monotonic_time, with_toplevel_role, CastSessionId, ResizeEdge};
+use crate::window::Mapped;
 
 pub mod backend_ext;
 pub mod keyboard_scroll;
@@ -433,6 +434,12 @@ impl State {
                 let raw = keysym.raw_latin_sym_or_raw_current_sym();
                 let modifiers = modifiers_from_state(*mods);
 
+                match raw {
+                    Some(Keysym::Alt_L) => this.niri.left_alt_pressed = pressed,
+                    Some(Keysym::Alt_R) => this.niri.right_alt_pressed = pressed,
+                    _ => (),
+                }
+
                 // After updating XKB state from accessibility-grabbed keys, return right away and
                 // don't handle them.
                 #[cfg(feature = "dbus")]
@@ -511,6 +518,22 @@ impl State {
 
                 if let Some(Keysym::space) = raw {
                     this.niri.screenshot_ui.set_space_down(pressed);
+                }
+
+                if pressed && !this.niri.screenshot_ui.is_open() && !is_inhibiting_shortcuts {
+                    if let Some(raw) = raw {
+                        let config = this.niri.config.borrow();
+                        if let Some(bind) = find_focus_or_spawn_bind(
+                            &config,
+                            raw,
+                            modifiers,
+                            this.niri.left_alt_pressed,
+                            this.niri.right_alt_pressed,
+                        ) {
+                            this.niri.suppressed_keys.insert(key_code);
+                            return FilterResult::Intercept(Some(bind));
+                        }
+                    }
                 }
 
                 let res = {
@@ -685,6 +708,8 @@ impl State {
                 self.backend.change_vt(vt);
                 // Changing VT may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
+                self.niri.left_alt_pressed = false;
+                self.niri.right_alt_pressed = false;
             }
             Action::Suspend => {
                 // Suspend can also bypass the usual key-release path, so stop immediately rather
@@ -693,6 +718,8 @@ impl State {
                 self.backend.suspend();
                 // Suspend may not deliver the key releases, so clear the state.
                 self.niri.suppressed_keys.clear();
+                self.niri.left_alt_pressed = false;
+                self.niri.right_alt_pressed = false;
             }
             Action::PowerOffMonitors => {
                 self.niri.deactivate_monitors(&mut self.backend);
@@ -718,6 +745,9 @@ impl State {
             Action::SpawnSh(command) => {
                 let (token, _) = self.niri.activation_state.create_external_token(None);
                 spawn_sh(command, Some(token.clone()));
+            }
+            Action::FocusOrSpawn(trigger) => {
+                self.focus_or_spawn(trigger);
             }
             Action::DoScreenTransition(delay_ms) => {
                 self.backend.with_primary_renderer(|renderer| {
@@ -4319,6 +4349,86 @@ impl State {
         }
     }
 
+    fn focus_or_spawn(&mut self, trigger: Keysym) {
+        let Some(entry) = ({
+            let config = self.niri.config.borrow();
+            config.focus_or_spawn.find_by_trigger(trigger).cloned()
+        }) else {
+            return;
+        };
+
+        let active_output = self.niri.layout.active_output().cloned();
+        let mut windows = Vec::new();
+        for (mon, ws_idx, ws) in self.niri.layout.workspaces() {
+            let on_current_output = match (mon, active_output.as_ref()) {
+                (Some(mon), Some(active_output)) => mon.output() == active_output,
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            let on_active_workspace = match mon {
+                Some(mon) => mon.active_workspace_idx() == ws_idx,
+                None => true,
+            };
+
+            for mapped in ws.windows() {
+                if focus_or_spawn_app_id(mapped).as_deref() != Some(entry.app_id.as_str()) {
+                    continue;
+                }
+
+                windows.push((
+                    mapped.id(),
+                    mapped.window.clone(),
+                    mapped.get_focus_timestamp(),
+                    on_current_output,
+                    on_active_workspace,
+                ));
+            }
+        }
+
+        if windows.is_empty() {
+            if let Some(action) = entry.spawn {
+                self.do_action(action, false);
+            }
+            return;
+        }
+
+        if let Some(current_id) = self.niri.layout.focus().map(|window| window.id()) {
+            if windows.iter().any(|(id, _, _, _, _)| *id == current_id) {
+                let mut cycle_windows = windows
+                    .into_iter()
+                    .filter(|(_, _, _, on_current_output, on_active_workspace)| {
+                        (entry.cycle_all_outputs || *on_current_output)
+                            && (entry.cycle_all_workspaces || *on_active_workspace)
+                    })
+                    .collect::<Vec<_>>();
+
+                if cycle_windows.len() <= 1 {
+                    return;
+                }
+
+                cycle_windows.sort_by_key(|(id, _, _, _, _)| id.get());
+                let Some(current_idx) = cycle_windows
+                    .iter()
+                    .position(|(id, _, _, _, _)| *id == current_id)
+                else {
+                    return;
+                };
+                let next_window =
+                    cycle_windows[(current_idx + 1) % cycle_windows.len()].1.clone();
+                self.focus_window(&next_window);
+                return;
+            }
+        }
+
+        if let Some(target_window) = windows
+            .into_iter()
+            .max_by_key(|(_, _, focus_timestamp, _, _)| *focus_timestamp)
+            .map(|(_, window, _, _, _)| window)
+        {
+            self.focus_window(&target_window);
+        }
+    }
+
     pub fn is_dnd_grab(grab: &dyn Any) -> bool {
         // Normal DnD
         grab.is::<DnDGrab<Self, WlDataSource, WlSurface>>()
@@ -4533,6 +4643,37 @@ fn modifiers_from_state(mods: ModifiersState) -> Modifiers {
         modifiers |= Modifiers::ISO_LEVEL5_SHIFT;
     }
     modifiers
+}
+
+fn find_focus_or_spawn_bind(
+    config: &Config,
+    trigger: Keysym,
+    modifiers: Modifiers,
+    left_alt_pressed: bool,
+    right_alt_pressed: bool,
+) -> Option<Bind> {
+    if modifiers != Modifiers::ALT || left_alt_pressed || !right_alt_pressed {
+        return None;
+    }
+
+    config.focus_or_spawn.find_by_trigger(trigger)?;
+
+    Some(Bind {
+        key: Key {
+            trigger: Trigger::Keysym(trigger),
+            modifiers: Modifiers::empty(),
+        },
+        action: Action::FocusOrSpawn(trigger),
+        repeat: false,
+        cooldown: None,
+        allow_when_locked: false,
+        allow_inhibiting: true,
+        hotkey_overlay_title: None,
+    })
+}
+
+fn focus_or_spawn_app_id(mapped: &Mapped) -> Option<String> {
+    with_toplevel_role(mapped.toplevel(), |role| role.app_id.clone())
 }
 
 fn should_activate_monitors<I: InputBackend>(event: &InputEvent<I>) -> bool {

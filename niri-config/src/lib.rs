@@ -33,6 +33,7 @@ pub mod appearance;
 pub mod binds;
 pub mod debug;
 pub mod error;
+pub mod focus_or_spawn;
 pub mod gestures;
 pub mod input;
 pub mod layer_rule;
@@ -49,6 +50,7 @@ pub use crate::appearance::*;
 pub use crate::binds::*;
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
+pub use crate::focus_or_spawn::{FocusOrSpawn, FocusOrSpawnEntry};
 pub use crate::gestures::Gestures;
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
 pub use crate::layer_rule::LayerRule;
@@ -85,6 +87,7 @@ pub struct Config {
     pub window_rules: Vec<WindowRule>,
     pub layer_rules: Vec<LayerRule>,
     pub binds: Binds,
+    pub focus_or_spawn: FocusOrSpawn,
     pub switch_events: SwitchBinds,
     pub debug: Debug,
     pub workspaces: Vec<Workspace>,
@@ -224,6 +227,10 @@ where
                     binds.retain(|bind| !part.0.iter().any(|new| new.key == bind.key));
                     // Add all new binds.
                     binds.extend(part.0);
+                }
+                "focus-or-spawn" => {
+                    let part = FocusOrSpawn::decode_node(node, ctx)?;
+                    config.borrow_mut().focus_or_spawn = part;
                 }
                 "environment" => {
                     let part = Environment::decode_node(node, ctx)?;
@@ -2152,6 +2159,9 @@ mod tests {
                         hotkey_overlay_title: None,
                     },
                 ],
+            ),
+            focus_or_spawn: FocusOrSpawn(
+                [],
             ),
             switch_events: SwitchBinds {
                 lid_open: None,
