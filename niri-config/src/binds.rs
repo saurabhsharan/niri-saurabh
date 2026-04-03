@@ -159,8 +159,14 @@ pub enum Action {
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
-    KeyboardScrollUp(#[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>),
-    KeyboardScrollDown(#[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>),
+    KeyboardScrollUp(
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
+        #[knuffel(property(name = "decay"), default = true)] bool,
+    ),
+    KeyboardScrollDown(
+        #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
+        #[knuffel(property(name = "decay"), default = true)] bool,
+    ),
     FocusColumnLeft,
     #[knuffel(skip)]
     FocusColumnLeftUnderMouse,
