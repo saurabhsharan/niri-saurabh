@@ -505,6 +505,30 @@ impl State {
                     }
                 }
 
+                // EXPOSE INTEGRATION: Handle release of the key that opened expose.
+                // If the key was held for >300ms, close expose (hold-to-peek behavior).
+                // If released quickly (<300ms), leave expose open (toggle behavior).
+                // This mimics macOS Mission Control: quick press toggles, hold peeks.
+                if !pressed {
+                    if let Some((trigger_code, trigger_time)) = this.niri.expose_trigger_key {
+                        if key_code == trigger_code {
+                            this.niri.expose_trigger_key = None;
+
+                            let hold_duration = Duration::from_micros(event.time())
+                                .saturating_sub(trigger_time);
+                            if hold_duration > Duration::from_millis(300)
+                                && this.niri.layout.is_expose_open()
+                            {
+                                this.niri.layout.close_expose();
+                                this.niri.queue_redraw_all();
+                            }
+
+                            this.niri.suppressed_keys.remove(&key_code);
+                            return FilterResult::Intercept(None);
+                        }
+                    }
+                }
+
                 if pressed
                     && raw == Some(Keysym::Escape)
                     && (this.niri.pick_window.is_some() || this.niri.pick_color.is_some())
@@ -594,7 +618,28 @@ impl State {
             return;
         }
 
+        // EXPOSE INTEGRATION: Track whether expose was open before handling the bind,
+        // so we can detect if this bind just opened it.
+        let expose_was_open = self.niri.layout.is_expose_open();
+
         self.handle_bind(bind.clone());
+
+        // EXPOSE INTEGRATION: If this bind just opened expose, record the trigger key
+        // for hold-to-dismiss behavior. When the key is released after being held >300ms,
+        // expose will auto-close. For quick presses it stays open (toggle behavior).
+        // Only enable this for bare F-key binds (no modifiers) since hold-to-dismiss
+        // with modifier combos is error-prone.
+        if !expose_was_open
+            && self.niri.layout.is_expose_open()
+            && matches!(
+                bind.key.trigger,
+                Trigger::Keysym(sym) if is_f_key(sym)
+            )
+            && bind.key.modifiers.is_empty()
+        {
+            let time = Duration::from_micros(event.time());
+            self.niri.expose_trigger_key = Some((event.key_code(), time));
+        }
 
         self.start_key_repeat(bind);
     }
@@ -2326,6 +2371,8 @@ impl State {
             }
             Action::ToggleOverview => {
                 self.niri.layout.toggle_overview();
+                // EXPOSE INTEGRATION: overview open closes expose, clear trigger key.
+                self.niri.expose_trigger_key = None;
                 self.niri.queue_redraw_all();
             }
             Action::OpenOverview => {
@@ -2339,9 +2386,24 @@ impl State {
                 }
             }
             // EXPOSE INTEGRATION
+            //
+            // When the trigger key is still tracked (meaning it hasn't been released yet —
+            // this is a key repeat), ignore the action to prevent rapid open/close cycling.
+            // This applies regardless of whether expose is currently open: if expose was
+            // closed by a click while the key is still held, repeats must still be ignored
+            // to prevent the click-then-repeat reopening expose in a loop.
+            // When the trigger key is NOT tracked (the user pressed the key again as a
+            // distinct press), allow toggling normally.
             Action::ToggleExpose => {
-                self.niri.layout.toggle_expose();
-                self.niri.queue_redraw_all();
+                if self.niri.expose_trigger_key.is_some() {
+                    // Key repeat while holding — ignore.
+                } else {
+                    self.niri.layout.toggle_expose();
+                    if !self.niri.layout.is_expose_open() {
+                        self.niri.expose_trigger_key = None;
+                    }
+                    self.niri.queue_redraw_all();
+                }
             }
             Action::OpenExpose => {
                 if self.niri.layout.open_expose() {
@@ -2350,6 +2412,7 @@ impl State {
             }
             Action::CloseExpose => {
                 if self.niri.layout.close_expose() {
+                    self.niri.expose_trigger_key = None;
                     self.niri.queue_redraw_all();
                 }
             }
@@ -3078,6 +3141,11 @@ impl State {
                     } else {
                         self.niri.layout.close_expose();
                     }
+                    // Don't clear expose_trigger_key here. If the user is holding
+                    // the trigger key (e.g. F4) while clicking, we need the key to
+                    // remain tracked so that subsequent key repeats are suppressed
+                    // by the ToggleExpose anti-repeat guard. The trigger key will
+                    // be cleared naturally when the key is released.
                     self.niri.queue_redraw_all();
                     return;
                 }
@@ -5065,6 +5133,12 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
         allow_inhibiting: false,
         hotkey_overlay_title: None,
     })
+}
+
+// EXPOSE INTEGRATION: Check if a keysym is a function key (F1-F35).
+fn is_f_key(sym: Keysym) -> bool {
+    use smithay::input::keyboard::keysyms::*;
+    (KEY_F1..=KEY_F35).contains(&sym.raw())
 }
 
 // EXPOSE INTEGRATION: Hardcoded keybindings for expose mode.

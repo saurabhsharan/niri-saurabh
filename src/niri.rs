@@ -329,6 +329,11 @@ pub struct Niri {
     pub keyboard_scroll_timer: Option<RegistrationToken>,
     pub active_keyboard_scroll: Option<ActiveKeyboardScroll>,
     pub keyboard_focus: KeyboardFocus,
+    // EXPOSE INTEGRATION: Track the key that opened expose for hold-to-dismiss behavior.
+    // When expose is opened by a single F-key press, we record the key_code and timestamp.
+    // On release: if held >300ms, close expose (hold-to-peek). If released quickly, expose
+    // stays open (toggle behavior, closed via Escape/click/re-press).
+    pub expose_trigger_key: Option<(Keycode, Duration)>,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
@@ -2524,6 +2529,7 @@ impl Niri {
 
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
+            expose_trigger_key: None,
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
