@@ -51,12 +51,41 @@ pub struct ActiveKeyboardScroll {
 }
 
 impl State {
+    // Reuse Niri's regular pointer-content refresh path so synthetic scrolling follows the same
+    // surface targeting rules as real pointer axis events.
+    fn refresh_keyboard_scroll_pointer_focus(&mut self) {
+        self.niri.pointer_visibility = PointerVisibility::Visible;
+        self.niri.tablet_cursor_location = None;
+        self.update_pointer_contents();
+    }
+
+    // Explicitly terminate the synthetic continuous-scroll sequence. Some clients keep scroll
+    // latching state until they see a sequence boundary, so relying on the absence of further
+    // axis events is not always enough to retarget the next scroll correctly.
+    fn emit_keyboard_scroll_stop(&mut self) {
+        self.refresh_keyboard_scroll_pointer_focus();
+
+        let now = get_monotonic_time();
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        let frame = AxisFrame::new(now.as_millis() as u32)
+            .source(AxisSource::Continuous)
+            .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
+            .stop(Axis::Vertical);
+
+        pointer.axis(self, frame);
+        pointer.frame(self);
+    }
+
     pub(super) fn start_keyboard_scroll(
         &mut self,
         direction: KeyboardScrollDirection,
         speed: f64,
         decay: bool,
     ) {
+        if self.niri.active_keyboard_scroll.is_some() {
+            self.emit_keyboard_scroll_stop();
+        }
+
         let now = get_monotonic_time();
 
         self.niri.active_keyboard_scroll = Some(ActiveKeyboardScroll {
@@ -102,6 +131,8 @@ impl State {
         if self.niri.active_keyboard_scroll.is_none() {
             return;
         }
+
+        self.emit_keyboard_scroll_stop();
 
         if let Some(token) = self.niri.keyboard_scroll_timer.take() {
             self.niri.event_loop.remove(token);
@@ -156,14 +187,11 @@ impl State {
 
         // If the pointer/focus context changed, don't continue or decay into a different target.
         if self.keyboard_scroll_targets() != scroll.targets {
+            self.emit_keyboard_scroll_stop();
             return;
         }
 
-        // Refresh pointer focus using Niri's existing pointer-content path so synthetic scrolling
-        // targets the same surface real pointer scrolling would currently hit.
-        self.niri.pointer_visibility = PointerVisibility::Visible;
-        self.niri.tablet_cursor_location = None;
-        self.update_pointer_contents();
+        self.refresh_keyboard_scroll_pointer_focus();
 
         let now = get_monotonic_time();
         let delta = now.saturating_sub(scroll.last_tick_time);
@@ -181,6 +209,7 @@ impl State {
             scroll.current_velocity *= decay_factor;
 
             if scroll.current_velocity < KEYBOARD_SCROLL_MIN_VELOCITY {
+                self.emit_keyboard_scroll_stop();
                 return;
             }
         }
