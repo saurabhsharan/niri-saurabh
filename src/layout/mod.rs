@@ -74,6 +74,8 @@ use crate::utils::{
 use crate::window::ResolvedWindowRules;
 
 pub mod closing_window;
+// EXPOSE INTEGRATION
+pub mod expose;
 pub mod floating;
 pub mod focus_ring;
 pub mod insert_hint_element;
@@ -323,6 +325,9 @@ pub struct Layout<W: LayoutElement> {
     overview_open: bool,
     /// The overview zoom progress.
     overview_progress: Option<OverviewProgress>,
+    // EXPOSE INTEGRATION
+    /// Whether expose is open (shows all windows on active workspace in a grid).
+    expose_open: bool,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
@@ -660,6 +665,7 @@ impl<W: LayoutElement> Layout<W> {
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
             overview_progress: None,
+            expose_open: false,
             options: Rc::new(options),
         }
     }
@@ -685,6 +691,7 @@ impl<W: LayoutElement> Layout<W> {
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
             overview_progress: None,
+            expose_open: false,
             options: opts,
         }
     }
@@ -4540,6 +4547,11 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn toggle_overview(&mut self) {
+        // EXPOSE INTEGRATION: Close expose if it's open.
+        if self.expose_open {
+            self.close_expose();
+        }
+
         self.overview_open = !self.overview_open;
 
         let from = self.overview_progress.take().map_or(0., |p| p.value());
@@ -4572,6 +4584,61 @@ impl<W: LayoutElement> Layout<W> {
 
         self.toggle_overview();
         true
+    }
+
+    // EXPOSE INTEGRATION: Expose toggle/open/close methods.
+    pub fn toggle_expose(&mut self) {
+        if self.expose_open {
+            self.close_expose();
+        } else {
+            self.open_expose();
+        }
+    }
+
+    pub fn open_expose(&mut self) -> bool {
+        if self.expose_open {
+            return false;
+        }
+
+        // Close overview if open — they are mutually exclusive.
+        if self.overview_open {
+            self.close_overview();
+        }
+
+        self.expose_open = true;
+
+        // Compute the expose layout for the active monitor.
+        if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &mut self.monitor_set {
+            let mon = &mut monitors[*active_monitor_idx];
+            mon.compute_expose_layout();
+        }
+
+        true
+    }
+
+    pub fn close_expose(&mut self) -> bool {
+        if !self.expose_open {
+            return false;
+        }
+        self.expose_open = false;
+
+        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            for mon in monitors {
+                mon.clear_expose_layout();
+            }
+        }
+
+        true
+    }
+
+    pub fn is_expose_open(&self) -> bool {
+        self.expose_open
+    }
+
+    /// Focus a window by id (used when clicking in expose) and close expose.
+    pub fn expose_focus_window(&mut self, window_id: &W::Id) {
+        self.activate_window(window_id);
+        self.close_expose();
     }
 
     pub fn toggle_overview_to_workspace(&mut self, ws_idx: usize) {
