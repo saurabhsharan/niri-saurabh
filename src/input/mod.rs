@@ -2317,14 +2317,15 @@ impl State {
             }
             // EXPOSE INTEGRATION
             //
-            // When expose is already open and the trigger key is still tracked (meaning it
-            // hasn't been released yet — this is a key repeat), ignore the action to prevent
-            // rapid open/close cycling. When the trigger key is NOT tracked (the user pressed
-            // the key again as a distinct press), allow toggling off normally.
+            // When the trigger key is still tracked (meaning it hasn't been released yet —
+            // this is a key repeat), ignore the action to prevent rapid open/close cycling.
+            // This applies regardless of whether expose is currently open: if expose was
+            // closed by a click while the key is still held, repeats must still be ignored
+            // to prevent the click-then-repeat reopening expose in a loop.
+            // When the trigger key is NOT tracked (the user pressed the key again as a
+            // distinct press), allow toggling normally.
             Action::ToggleExpose => {
-                if self.niri.layout.is_expose_open()
-                    && self.niri.expose_trigger_key.is_some()
-                {
+                if self.niri.expose_trigger_key.is_some() {
                     // Key repeat while holding — ignore.
                 } else {
                     self.niri.layout.toggle_expose();
@@ -2905,7 +2906,11 @@ impl State {
                     } else {
                         self.niri.layout.close_expose();
                     }
-                    self.niri.expose_trigger_key = None;
+                    // Don't clear expose_trigger_key here. If the user is holding
+                    // the trigger key (e.g. F4) while clicking, we need the key to
+                    // remain tracked so that subsequent key repeats are suppressed
+                    // by the ToggleExpose anti-repeat guard. The trigger key will
+                    // be cleared naturally when the key is released.
                     self.niri.queue_redraw_all();
                     return;
                 }
