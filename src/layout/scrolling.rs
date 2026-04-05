@@ -1444,6 +1444,22 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         true
     }
 
+    // EXPOSE INTEGRATION: Snap the view offset to the active column's final position,
+    // cancelling any in-progress scroll animation. This is used when closing expose after
+    // focusing a window: activate_window() starts a horizontal_view_movement spring animation
+    // to scroll to the newly focused column, but since expose already showed all windows in a
+    // grid and the user explicitly clicked one, the scrolling animation is distracting. Instead
+    // we jump directly to the target position so the first frame after expose closes shows the
+    // final layout.
+    pub fn snap_view_offset_to_active_column(&mut self) {
+        if self.columns.is_empty() {
+            return;
+        }
+        self.view_offset = ViewOffset::Static(
+            self.compute_new_view_offset_for_column(None, self.active_column_idx, None),
+        );
+    }
+
     pub fn start_close_animation_for_window(
         &mut self,
         renderer: &mut GlesRenderer,

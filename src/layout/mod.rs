@@ -4636,8 +4636,20 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     /// Focus a window by id (used when clicking in expose) and close expose.
+    ///
+    /// After activating the window, we snap the scrolling view offset to its final position.
+    /// Without this, activate_window() starts a horizontal scroll animation to bring the
+    /// focused column into view, which produces a visible sliding effect in the first few
+    /// frames after expose closes. Since the user already saw all windows in the expose grid
+    /// and made an explicit choice, the animation is unnecessary and distracting.
     pub fn expose_focus_window(&mut self, window_id: &W::Id) {
         self.activate_window(window_id);
+
+        // Cancel the view offset animation so the view jumps to the final position instantly.
+        if let Some(mon) = self.active_monitor() {
+            mon.active_workspace().snap_scrolling_view_offset();
+        }
+
         self.close_expose();
     }
 

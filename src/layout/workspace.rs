@@ -1830,6 +1830,12 @@ impl<W: LayoutElement> Workspace<W> {
         }
     }
 
+    // EXPOSE INTEGRATION: Cancel the scrolling view offset animation so the view
+    // jumps instantly to the focused column. See ScrollingSpace::snap_view_offset_to_active_column.
+    pub fn snap_scrolling_view_offset(&mut self) {
+        self.scrolling.snap_view_offset_to_active_column();
+    }
+
     pub fn activate_window_without_raising(&mut self, window: &W::Id) -> bool {
         if self.floating.activate_window_without_raising(window) {
             self.floating_is_active = FloatingActive::Yes;
