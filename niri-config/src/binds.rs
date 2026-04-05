@@ -361,6 +361,10 @@ pub enum Action {
     ToggleOverview,
     OpenOverview,
     CloseOverview,
+    // EXPOSE INTEGRATION
+    ToggleExpose,
+    OpenExpose,
+    CloseExpose,
     #[knuffel(skip)]
     ToggleWindowUrgent(u64),
     #[knuffel(skip)]
@@ -696,6 +700,10 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ToggleOverview {} => Self::ToggleOverview,
             niri_ipc::Action::OpenOverview {} => Self::OpenOverview,
             niri_ipc::Action::CloseOverview {} => Self::CloseOverview,
+            // EXPOSE INTEGRATION
+            niri_ipc::Action::ToggleExpose {} => Self::ToggleExpose,
+            niri_ipc::Action::OpenExpose {} => Self::OpenExpose,
+            niri_ipc::Action::CloseExpose {} => Self::CloseExpose,
             niri_ipc::Action::ToggleWindowUrgent { id } => Self::ToggleWindowUrgent(id),
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
