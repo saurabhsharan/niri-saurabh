@@ -538,6 +538,15 @@ impl State {
                         }
                     }
 
+                    // EXPOSE INTEGRATION: Hardcoded keybindings when expose is open.
+                    if this.niri.keyboard_focus.is_expose() && pressed {
+                        if let Some(bind) = raw.and_then(|raw| hardcoded_expose_bind(raw, *mods))
+                        {
+                            this.niri.suppressed_keys.insert(key_code);
+                            return FilterResult::Intercept(Some(bind));
+                        }
+                    }
+
                     // Interaction with the active window, immediately update the active window's
                     // focus timestamp without waiting for a possible pending MRU lock-in delay.
                     this.niri.mru_apply_keyboard_commit();
@@ -2259,6 +2268,21 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
+            // EXPOSE INTEGRATION
+            Action::ToggleExpose => {
+                self.niri.layout.toggle_expose();
+                self.niri.queue_redraw_all();
+            }
+            Action::OpenExpose => {
+                if self.niri.layout.open_expose() {
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::CloseExpose => {
+                if self.niri.layout.close_expose() {
+                    self.niri.queue_redraw_all();
+                }
+            }
             Action::ToggleWindowUrgent(id) => {
                 let window = self
                     .niri
@@ -2803,6 +2827,26 @@ impl State {
             self.niri.tablet_cursor_location = None;
 
             let is_overview_open = self.niri.layout.is_overview_open();
+
+            // EXPOSE INTEGRATION: Handle clicks during expose mode.
+            if self.niri.layout.is_expose_open()
+                && button == Some(MouseButton::Left)
+                && button_state == ButtonState::Pressed
+                && !pointer.is_grabbed()
+            {
+                let pointer_loc = pointer.current_location();
+                if let Some((output, pos_within_output)) = self.niri.output_under(pointer_loc) {
+                    let mon = self.niri.layout.monitor_for_output(&output);
+                    let window_id = mon.and_then(|m| m.expose_window_at(pos_within_output).cloned());
+                    if let Some(window_id) = window_id {
+                        self.niri.layout.expose_focus_window(&window_id);
+                    } else {
+                        self.niri.layout.close_expose();
+                    }
+                    self.niri.queue_redraw_all();
+                    return;
+                }
+            }
 
             if is_overview_open && !pointer.is_grabbed() && button == Some(MouseButton::Right) {
                 if let Some((output, ws)) = self.niri.workspace_under_cursor(true) {
@@ -4664,6 +4708,34 @@ fn hardcoded_overview_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
         },
         action,
         repeat,
+        cooldown: None,
+        allow_when_locked: false,
+        allow_inhibiting: false,
+        hotkey_overlay_title: None,
+    })
+}
+
+// EXPOSE INTEGRATION: Hardcoded keybindings for expose mode.
+fn hardcoded_expose_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
+    let mods = modifiers_from_state(mods);
+    if !mods.is_empty() {
+        return None;
+    }
+
+    let action = match raw {
+        Keysym::Escape | Keysym::Return => Action::CloseExpose,
+        _ => {
+            return None;
+        }
+    };
+
+    Some(Bind {
+        key: Key {
+            trigger: Trigger::Keysym(raw),
+            modifiers: Modifiers::empty(),
+        },
+        action,
+        repeat: false,
         cooldown: None,
         allow_when_locked: false,
         allow_inhibiting: false,

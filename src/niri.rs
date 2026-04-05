@@ -519,6 +519,8 @@ pub enum KeyboardFocus {
     ScreenshotUi,
     ExitConfirmDialog,
     Overview,
+    // EXPOSE INTEGRATION
+    Expose,
     Mru,
 }
 
@@ -668,6 +670,7 @@ impl KeyboardFocus {
             KeyboardFocus::ScreenshotUi => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
+            KeyboardFocus::Expose => None,
             KeyboardFocus::Mru => None,
         }
     }
@@ -680,6 +683,7 @@ impl KeyboardFocus {
             KeyboardFocus::ScreenshotUi => None,
             KeyboardFocus::ExitConfirmDialog => None,
             KeyboardFocus::Overview => None,
+            KeyboardFocus::Expose => None,
             KeyboardFocus::Mru => None,
         }
     }
@@ -690,6 +694,11 @@ impl KeyboardFocus {
 
     pub fn is_overview(&self) -> bool {
         matches!(self, KeyboardFocus::Overview)
+    }
+
+    // EXPOSE INTEGRATION
+    pub fn is_expose(&self) -> bool {
+        matches!(self, KeyboardFocus::Expose)
     }
 }
 
@@ -1204,6 +1213,8 @@ impl State {
                 |layer| excl_focus_on_layer(layer).or_else(|| on_d_focus_on_layer(layer));
 
             let is_overview_open = self.niri.layout.is_overview_open();
+            // EXPOSE INTEGRATION
+            let is_expose_open = self.niri.layout.is_expose_open();
 
             let mut surface = grab_on_layer(Layer::Overlay);
             // FIXME: we shouldn't prioritize the top layer grabs over regular overlay input or a
@@ -1211,7 +1222,7 @@ impl State {
             // in the first place. Or a better way to structure this code.
             surface = surface.or_else(|| grab_on_layer(Layer::Top));
 
-            if !is_overview_open {
+            if !is_overview_open && !is_expose_open {
                 surface = surface.or_else(|| grab_on_layer(Layer::Bottom));
                 surface = surface.or_else(|| grab_on_layer(Layer::Background));
             }
@@ -1228,6 +1239,8 @@ impl State {
 
                 if is_overview_open {
                     surface = Some(surface.unwrap_or(KeyboardFocus::Overview));
+                } else if is_expose_open {
+                    surface = Some(surface.unwrap_or(KeyboardFocus::Expose));
                 }
 
                 surface = surface.or_else(|| on_d_focus_on_layer(Layer::Bottom));
@@ -3156,7 +3169,8 @@ impl Niri {
         output: &Output,
         pos_within_output: Point<f64, Logical>,
     ) -> bool {
-        if self.layout.is_overview_open() {
+        // EXPOSE INTEGRATION
+        if self.layout.is_overview_open() || self.layout.is_expose_open() {
             return false;
         }
 
@@ -3403,6 +3417,8 @@ impl Niri {
             layer_popup_under(Layer::Overlay).or_else(|| layer_toplevel_under(Layer::Overlay));
 
         let is_overview_open = self.layout.is_overview_open();
+        // EXPOSE INTEGRATION
+        let is_overlay_open = is_overview_open || self.layout.is_expose_open();
 
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
@@ -3428,15 +3444,19 @@ impl Niri {
 
             under = under.or_else(interactive_moved_window_under);
 
-            if !is_overview_open {
+            if !is_overlay_open {
                 under = under
                     .or_else(|| layer_popup_under(Layer::Bottom))
                     .or_else(|| layer_popup_under(Layer::Background));
             }
 
-            under = under.or_else(window_under);
+            // EXPOSE INTEGRATION: Don't do normal window hit testing during expose;
+            // expose has its own hit testing via expose_window_at().
+            if !self.layout.is_expose_open() {
+                under = under.or_else(window_under);
+            }
 
-            if !is_overview_open {
+            if !is_overlay_open {
                 under = under
                     .or_else(|| layer_toplevel_under(Layer::Bottom))
                     .or_else(|| layer_toplevel_under(Layer::Background));
@@ -3984,6 +4004,7 @@ impl Niri {
             KeyboardFocus::ScreenshotUi => true,
             KeyboardFocus::ExitConfirmDialog => true,
             KeyboardFocus::Overview => true,
+            KeyboardFocus::Expose => true,
             KeyboardFocus::Mru => true,
         };
 
@@ -4405,7 +4426,13 @@ impl Niri {
                 push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
             }
 
-            mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
+            // EXPOSE INTEGRATION: When expose is active, render the expose grid
+            // instead of normal workspace rendering.
+            if mon.is_expose_open() {
+                mon.render_expose(renderer, target, &mut |elem| push(elem.into()));
+            } else {
+                mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
+            }
 
             for (ws, geo) in mon.workspaces_with_render_geo() {
                 // The render element namespace. This will be set to the workspace index for
@@ -6196,7 +6223,8 @@ impl Niri {
         }
 
         if let Some(window) = &new_focus.window {
-            if !self.layout.is_overview_open() && current_focus.window.as_ref() != Some(window) {
+            // EXPOSE INTEGRATION
+            if !self.layout.is_overview_open() && !self.layout.is_expose_open() && current_focus.window.as_ref() != Some(window) {
                 let (window, hit) = window;
 
                 // Don't trigger focus-follows-mouse over the tab indicator.
