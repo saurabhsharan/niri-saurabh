@@ -11,12 +11,13 @@ use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
-use super::scrolling::{Column, ColumnWidth};
+use super::scrolling::{Column, ColumnWidth, ScrollingSpaceRenderElement};
 use super::tile::Tile;
 use super::workspace::{
     compute_working_area, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
     WorkspaceRenderElement,
 };
+use super::expose::ExposeLayout;
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
@@ -79,6 +80,11 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) overview_open: bool,
     /// Progress of the overview zoom animation, 1 is fully in overview.
     overview_progress: Option<OverviewProgress>,
+    // EXPOSE INTEGRATION
+    /// Whether expose is open (shows all windows on active workspace in a grid).
+    pub(super) expose_open: bool,
+    /// Cached expose layout for the active workspace.
+    pub(super) expose_layout: Option<ExposeLayout<W::Id>>,
     /// Clock for driving animations.
     pub(super) clock: Clock,
     /// Configurable properties of the layout as received from the parent layout.
@@ -340,6 +346,8 @@ impl<W: LayoutElement> Monitor<W> {
             insert_hint_render_loc: None,
             overview_open: false,
             overview_progress: None,
+            expose_open: false,
+            expose_layout: None,
             workspace_switch: None,
             clock,
             base_options,
@@ -364,6 +372,11 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn output_name(&self) -> &String {
         &self.output_name
+    }
+
+    // EXPOSE INTEGRATION
+    pub fn is_expose_open(&self) -> bool {
+        self.expose_open
     }
 
     pub fn active_workspace_idx(&self) -> usize {
@@ -1390,6 +1403,33 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    // EXPOSE INTEGRATION: Compute and manage the expose grid layout.
+    pub(super) fn compute_expose_layout(&mut self) {
+        let ws = &self.workspaces[self.active_workspace_idx];
+        let view_size = self.view_size;
+
+        let windows_with_positions = ws
+            .tiles_with_render_positions()
+            .map(|(tile, pos, _visible)| {
+                (tile.window().id().clone(), pos, tile.tile_size())
+            });
+
+        self.expose_open = true;
+        self.expose_layout = Some(ExposeLayout::compute(windows_with_positions, view_size));
+    }
+
+    pub(super) fn clear_expose_layout(&mut self) {
+        self.expose_open = false;
+        self.expose_layout = None;
+    }
+
+    /// Hit-test: which expose window is under this output-local point?
+    pub fn expose_window_at(&self, pos: Point<f64, Logical>) -> Option<&W::Id> {
+        let layout = self.expose_layout.as_ref()?;
+        // For MVP without animation, progress is always 1.0 when expose is open.
+        layout.window_at(pos, 1.0)
+    }
+
     #[cfg(test)]
     pub(super) fn overview_progress_value(&self) -> Option<f64> {
         self.overview_progress.as_ref().map(|p| p.value())
@@ -1634,7 +1674,8 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn render_above_top_layer(&self) -> bool {
         // Render above the top layer only if the view is stationary.
-        if self.workspace_switch.is_some() || self.overview_progress.is_some() {
+        // EXPOSE INTEGRATION: expose also renders below top layer.
+        if self.workspace_switch.is_some() || self.overview_progress.is_some() || self.expose_open {
             return false;
         }
 
@@ -1744,6 +1785,76 @@ impl<W: LayoutElement> Monitor<W> {
             }
 
             ws.render_scrolling(renderer, target, focus_ring, push!());
+        }
+    }
+
+    // EXPOSE INTEGRATION: Render all windows at their expose grid positions.
+    pub fn render_expose<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        target: RenderTarget,
+        push: &mut dyn FnMut(MonitorRenderElement<R>),
+    ) {
+        let _span = tracy_client::span!("Monitor::render_expose");
+
+        let Some(expose_layout) = &self.expose_layout else {
+            return;
+        };
+
+        let ws = &self.workspaces[self.active_workspace_idx];
+        let scale = self.scale.fractional_scale();
+
+        // Use infinite crop bounds (no clipping needed for expose).
+        let crop_bounds = Rectangle::new(
+            Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+            Size::from((i32::MAX, i32::MAX)),
+        );
+
+        // For MVP without animation, progress = 1.0 (fully in expose).
+        let progress = 1.0_f64;
+
+        for exposed in &expose_layout.windows {
+            // Find the tile in the workspace.
+            let tile_and_pos = ws
+                .tiles_with_render_positions()
+                .find(|(t, _, _)| *t.window().id() == exposed.id);
+            let Some((tile, _orig_pos, _visible)) = tile_and_pos else {
+                continue;
+            };
+
+            let target_pos = super::expose::lerp_point(
+                exposed.original_pos,
+                exposed.target_pos,
+                progress,
+            );
+            let target_scale = super::expose::lerp(1.0, exposed.target_scale, progress);
+
+            // Render the tile at (0, 0), then apply per-window scale + position.
+            tile.render(
+                renderer,
+                Point::from((0., 0.)),
+                true, // focus_ring
+                target,
+                &mut |elem| {
+                    let elem = WorkspaceRenderElement::from(
+                        ScrollingSpaceRenderElement::from(elem),
+                    );
+                    let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
+                    let Some(elem) = elem else { return };
+                    let elem = MonitorInnerRenderElement::from(elem);
+                    let elem = RescaleRenderElement::from_element(
+                        elem,
+                        Point::from((0, 0)),
+                        target_scale,
+                    );
+                    let elem = RelocateRenderElement::from_element(
+                        elem,
+                        target_pos.to_physical_precise_round(scale),
+                        Relocate::Relative,
+                    );
+                    push(elem);
+                },
+            );
         }
     }
 
