@@ -19,7 +19,7 @@ use crate::render_helpers::clipped_surface::ClippedSurfaceRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
-use crate::render_helpers::RenderTarget;
+use crate::render_helpers::RenderCtx;
 use crate::utils::{output_size, ResizeEdge};
 use crate::window::mapped::MappedId;
 use crate::window::Mapped;
@@ -421,14 +421,13 @@ impl PipManager {
         &self,
         niri: &Niri,
         output: &Output,
-        renderer: &mut R,
-        target: RenderTarget,
+        mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(PipRenderElement<R>),
     ) {
         let scale = output.current_scale().fractional_scale();
         let scale = Scale::from(scale);
-        let has_border_shader = BorderRenderElement::has_shader(renderer);
-        let clip_shader = ClippedSurfaceRenderElement::shader(renderer).cloned();
+        let has_border_shader = BorderRenderElement::has_shader(ctx.renderer);
+        let clip_shader = ClippedSurfaceRenderElement::shader(ctx.renderer).cloned();
 
         for thumb in self
             .thumbnails
@@ -473,11 +472,10 @@ impl PipManager {
             let shadow_scale = thumb_scale.x.min(thumb_scale.y) as f32;
 
             mapped.render_normal(
-                renderer,
+                ctx.r(),
                 Point::new(0., 0.),
                 scale,
                 1.,
-                target,
                 &mut |elem| {
                     let elem = clip_element(
                         elem,
@@ -506,7 +504,7 @@ impl PipManager {
                 scale.x,
                 1.,
             );
-            shadow.render(renderer, thumb.position, &mut |elem| {
+            shadow.render(ctx.renderer, thumb.position, &mut |elem| {
                 push(PipRenderElement::Shadow(elem));
             });
         }
@@ -564,6 +562,9 @@ fn clip_element<R: NiriRenderer>(
             }
 
             PipThumbnailRenderElement::LayoutElement(LayoutElementRenderElement::SolidColor(elem))
+        }
+        LayoutElementRenderElement::BackgroundEffect(elem) => {
+            PipThumbnailRenderElement::LayoutElement(LayoutElementRenderElement::BackgroundEffect(elem))
         }
     }
 }
