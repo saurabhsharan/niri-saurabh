@@ -248,6 +248,16 @@ pub trait LayoutElement {
 
     fn is_urgent(&self) -> bool;
 
+    /// Returns the window title, if available.
+    fn title(&self) -> Option<String> {
+        None
+    }
+
+    /// Returns the application ID, if available.
+    fn app_id(&self) -> Option<String> {
+        None
+    }
+
     fn configure_intent(&self) -> ConfigureIntent;
     fn send_pending_configure(&mut self);
 
