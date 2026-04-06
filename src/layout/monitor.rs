@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::min;
 use std::iter::zip;
 use std::rc::Rc;
@@ -7,6 +8,7 @@ use niri_config::{CornerRadius, LayoutPart};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
+use smithay::backend::renderer::element::Kind;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -22,9 +24,11 @@ use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Optio
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::niri_render_elements;
+use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
+use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::render_helpers::RenderTarget;
 use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
@@ -44,6 +48,111 @@ const WORKSPACE_GESTURE_RUBBER_BAND: RubberBand = RubberBand {
 ///
 /// This constant is tied to the default dnd-edge-workspace-switch max-speed setting.
 const WORKSPACE_DND_EDGE_SCROLL_MOVEMENT: f64 = 1500.;
+
+/// Font for expose window labels.
+const EXPOSE_LABEL_FONT: &str = "sans 11px";
+/// Gap between the window thumbnail bottom edge and the label.
+const EXPOSE_LABEL_GAP: f64 = 8.0;
+/// Maximum label width as a fraction of the cell width (to truncate long titles).
+const EXPOSE_LABEL_MAX_WIDTH_FRAC: f64 = 0.95;
+
+/// Cached expose label textures, keyed by scale to invalidate on scale change.
+#[derive(Debug, Default)]
+struct ExposeLabels {
+    scale: f64,
+    textures: Vec<Option<ExposeLabelTexture>>,
+}
+
+/// A single cached label texture for an expose window.
+#[derive(Debug)]
+struct ExposeLabelTexture {
+    buffer: TextureBuffer<smithay::backend::renderer::gles::GlesTexture>,
+    /// Logical size of the label.
+    logical_size: Size<f64, Logical>,
+}
+
+/// Generate a text label texture with the window title (bold) and app_id below it.
+fn generate_expose_label(
+    renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    title: &str,
+    app_id: &str,
+    max_width: f64,
+    scale: f64,
+) -> Option<ExposeLabelTexture> {
+    use pango::FontDescription;
+    use pangocairo::cairo;
+    use pangocairo::cairo::ImageSurface;
+    use smithay::backend::allocator::Fourcc;
+    use smithay::utils::Transform;
+
+    let physical_max_width = (max_width * scale).round() as i32;
+
+    // Create a PangoLayout to measure and render text.
+    let tmp_surface = ImageSurface::create(cairo::Format::ARgb32, 0, 0).ok()?;
+    let tmp_cr = cairo::Context::new(&tmp_surface).ok()?;
+
+    let layout = pangocairo::functions::create_layout(&tmp_cr);
+    layout.context().set_round_glyph_positions(false);
+    layout.set_alignment(pango::Alignment::Center);
+    layout.set_width(physical_max_width * pango::SCALE);
+    layout.set_ellipsize(pango::EllipsizeMode::End);
+
+    let mut font = FontDescription::from_string(EXPOSE_LABEL_FONT);
+    font.set_absolute_size(crate::utils::to_physical_precise_round(scale, font.size()));
+
+    // Build markup: bold title on first line, dimmed app_id on second.
+    let title_escaped = pango::glib::markup_escape_text(title);
+    let app_id_escaped = pango::glib::markup_escape_text(app_id);
+    let markup = format!(
+        "<b>{title_escaped}</b>\n<span fgcolor='#999999' size='smaller'>{app_id_escaped}</span>"
+    );
+    layout.set_font_description(Some(&font));
+    layout.set_markup(&markup);
+
+    let (text_width, text_height) = layout.pixel_size();
+    if text_width <= 0 || text_height <= 0 {
+        return None;
+    }
+
+    let width = text_width.min(physical_max_width);
+    let height = text_height;
+
+    // Render the text onto a surface.
+    let surface = ImageSurface::create(cairo::Format::ARgb32, width, height).ok()?;
+    let cr = cairo::Context::new(&surface).ok()?;
+
+    // Re-create layout on the final context.
+    let layout = pangocairo::functions::create_layout(&cr);
+    layout.context().set_round_glyph_positions(false);
+    layout.set_alignment(pango::Alignment::Center);
+    layout.set_width(width * pango::SCALE);
+    layout.set_ellipsize(pango::EllipsizeMode::End);
+    layout.set_font_description(Some(&font));
+    layout.set_markup(&markup);
+
+    cr.set_source_rgba(1., 1., 1., 0.9);
+    pangocairo::functions::show_layout(&cr, &layout);
+
+    drop(cr);
+    let data = surface.take_data().ok()?;
+    let buffer = TextureBuffer::from_memory(
+        renderer,
+        &data,
+        Fourcc::Argb8888,
+        (width, height),
+        false,
+        scale,
+        Transform::Normal,
+        Vec::new(),
+    )
+    .ok()?;
+
+    let logical_size = Size::from((width as f64 / scale, height as f64 / scale));
+    Some(ExposeLabelTexture {
+        buffer,
+        logical_size,
+    })
+}
 
 #[derive(Debug)]
 pub struct Monitor<W: LayoutElement> {
@@ -85,6 +194,9 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) expose_open: bool,
     /// Cached expose layout for the active workspace.
     pub(super) expose_layout: Option<ExposeLayout<W::Id>>,
+    /// Cached text label textures for expose windows (title + app_id).
+    /// Uses RefCell so render_expose (which takes &self) can lazily populate it.
+    expose_label_cache: RefCell<ExposeLabels>,
     /// Clock for driving animations.
     pub(super) clock: Clock,
     /// Configurable properties of the layout as received from the parent layout.
@@ -195,6 +307,8 @@ niri_render_elements! {
         UncroppedInsertHint = InsertHintRenderElement,
         Shadow = ShadowRenderElement,
         SolidColor = SolidColorRenderElement,
+        // EXPOSE INTEGRATION: Text labels rendered below window thumbnails.
+        Texture = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
     }
 }
 
@@ -348,6 +462,7 @@ impl<W: LayoutElement> Monitor<W> {
             overview_progress: None,
             expose_open: false,
             expose_layout: None,
+            expose_label_cache: RefCell::new(ExposeLabels::default()),
             workspace_switch: None,
             clock,
             base_options,
@@ -1421,6 +1536,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub(super) fn clear_expose_layout(&mut self) {
         self.expose_open = false;
         self.expose_layout = None;
+        self.expose_label_cache.borrow_mut().textures.clear();
     }
 
     /// Hit-test: which expose window is under this output-local point?
@@ -1788,7 +1904,8 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    // EXPOSE INTEGRATION: Render all windows at their expose grid positions.
+    // EXPOSE INTEGRATION: Render all windows at their expose grid positions,
+    // with title + app_id labels below each thumbnail.
     pub fn render_expose<R: NiriRenderer>(
         &self,
         renderer: &mut R,
@@ -1813,7 +1930,36 @@ impl<W: LayoutElement> Monitor<W> {
         // For MVP without animation, progress = 1.0 (fully in expose).
         let progress = 1.0_f64;
 
-        for exposed in &expose_layout.windows {
+        // Lazily generate label textures if not yet cached (or if scale changed).
+        {
+            let mut cache = self.expose_label_cache.borrow_mut();
+            if cache.scale != scale || cache.textures.len() != expose_layout.windows.len() {
+                cache.scale = scale;
+                cache.textures.clear();
+
+                let gles = renderer.as_gles_renderer();
+                for exposed in &expose_layout.windows {
+                    let tile_and_pos = ws
+                        .tiles_with_render_positions()
+                        .find(|(t, _, _)| *t.window().id() == exposed.id);
+
+                    let label = tile_and_pos.and_then(|(tile, _, _)| {
+                        let title = tile.window().title().unwrap_or_default();
+                        let app_id = tile.window().app_id().unwrap_or_default();
+                        if title.is_empty() && app_id.is_empty() {
+                            return None;
+                        }
+                        let max_width =
+                            exposed.tile_size.w * exposed.target_scale * EXPOSE_LABEL_MAX_WIDTH_FRAC;
+                        generate_expose_label(gles, &title, &app_id, max_width, scale)
+                    });
+
+                    cache.textures.push(label);
+                }
+            }
+        }
+
+        for (i, exposed) in expose_layout.windows.iter().enumerate() {
             // Find the tile in the workspace.
             let tile_and_pos = ws
                 .tiles_with_render_positions()
@@ -1855,6 +2001,40 @@ impl<W: LayoutElement> Monitor<W> {
                     push(elem);
                 },
             );
+
+            // Render the label below the window thumbnail.
+            let cache = self.expose_label_cache.borrow();
+            if let Some(label) = cache.textures.get(i).and_then(|l| l.as_ref()) {
+                let scaled_w = exposed.tile_size.w * target_scale;
+                let scaled_h = exposed.tile_size.h * target_scale;
+
+                // Center the label horizontally below the thumbnail.
+                let label_x = target_pos.x + (scaled_w - label.logical_size.w) / 2.0;
+                let label_y = target_pos.y + scaled_h + EXPOSE_LABEL_GAP;
+                let label_loc = Point::from((label_x, label_y));
+
+                let elem = TextureRenderElement::from_texture_buffer(
+                    label.buffer.clone(),
+                    label_loc.to_physical_precise_round(scale).to_logical(scale),
+                    1.,
+                    None,
+                    None,
+                    Kind::Unspecified,
+                );
+                let elem = PrimaryGpuTextureRenderElement(elem);
+                let elem = MonitorInnerRenderElement::Texture(elem);
+                let elem = RescaleRenderElement::from_element(
+                    elem,
+                    Point::from((0, 0)),
+                    1.0, // Labels are already at the correct size.
+                );
+                let elem = RelocateRenderElement::from_element(
+                    elem,
+                    Point::from((0, 0)),
+                    Relocate::Relative,
+                );
+                push(elem);
+            }
         }
     }
 
