@@ -19,11 +19,12 @@ use super::workspace::{
     compute_working_area, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
     WorkspaceRenderElement,
 };
-use super::expose::ExposeLayout;
+use super::expose::{ExposeDirection, ExposeLayout};
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::niri_render_elements;
+use crate::render_helpers::border::BorderRenderElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
@@ -55,6 +56,10 @@ const EXPOSE_LABEL_FONT: &str = "sans 11px";
 const EXPOSE_LABEL_GAP: f64 = 8.0;
 /// Maximum label width as a fraction of the cell width (to truncate long titles).
 const EXPOSE_LABEL_MAX_WIDTH_FRAC: f64 = 0.95;
+/// Width of the selection border around the focused expose window.
+const EXPOSE_SELECTION_BORDER_WIDTH: f64 = 4.0;
+/// Corner radius for the selection border.
+const EXPOSE_SELECTION_CORNER_RADIUS: f32 = 10.0;
 
 /// Cached expose label textures, keyed by scale to invalidate on scale change.
 #[derive(Debug, Default)]
@@ -309,6 +314,8 @@ niri_render_elements! {
         SolidColor = SolidColorRenderElement,
         // EXPOSE INTEGRATION: Text labels rendered below window thumbnails.
         Texture = crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement,
+        // EXPOSE INTEGRATION: Gradient selection border around the selected window.
+        Border = BorderRenderElement,
     }
 }
 
@@ -1523,6 +1530,9 @@ impl<W: LayoutElement> Monitor<W> {
         let ws = &self.workspaces[self.active_workspace_idx];
         let view_size = self.view_size;
 
+        // Remember the focused window to pre-select it in expose.
+        let focused_id = ws.active_window().map(|w| w.id().clone());
+
         let windows_with_positions = ws
             .tiles_with_render_positions()
             .map(|(tile, pos, _visible)| {
@@ -1530,13 +1540,32 @@ impl<W: LayoutElement> Monitor<W> {
             });
 
         self.expose_open = true;
-        self.expose_layout = Some(ExposeLayout::compute(windows_with_positions, view_size));
+        let mut layout = ExposeLayout::compute(windows_with_positions, view_size);
+
+        // Pre-select the currently focused window.
+        if let Some(ref id) = focused_id {
+            layout.select_by_id(id);
+        }
+
+        self.expose_layout = Some(layout);
     }
 
     pub(super) fn clear_expose_layout(&mut self) {
         self.expose_open = false;
         self.expose_layout = None;
         self.expose_label_cache.borrow_mut().textures.clear();
+    }
+
+    /// Navigate the expose selection in the given direction.
+    pub fn expose_navigate(&mut self, direction: ExposeDirection) {
+        if let Some(layout) = &mut self.expose_layout {
+            layout.navigate(direction);
+        }
+    }
+
+    /// Get the id of the currently selected expose window.
+    pub fn expose_selected_id(&self) -> Option<&W::Id> {
+        self.expose_layout.as_ref().and_then(|l| l.selected_id())
     }
 
     /// Hit-test: which expose window is under this output-local point?
@@ -2031,6 +2060,42 @@ impl<W: LayoutElement> Monitor<W> {
                 let elem = RelocateRenderElement::from_element(
                     elem,
                     Point::from((0, 0)),
+                    Relocate::Relative,
+                );
+                push(elem);
+            }
+
+            // Render the selection border around the selected window.
+            if i == expose_layout.selected_idx {
+                let bw = EXPOSE_SELECTION_BORDER_WIDTH;
+                let scaled_w = exposed.tile_size.w * target_scale;
+                let scaled_h = exposed.tile_size.h * target_scale;
+                let border_size = Size::from((scaled_w + 2.0 * bw, scaled_h + 2.0 * bw));
+                let border_pos = Point::from((target_pos.x - bw, target_pos.y - bw));
+                let corner_radius = CornerRadius::from(EXPOSE_SELECTION_CORNER_RADIUS);
+
+                let elem = BorderRenderElement::new(
+                    border_size,
+                    Rectangle::new(Point::from((0., 0.)), border_size),
+                    niri_config::GradientInterpolation::default(),
+                    niri_config::Color::new_unpremul(0.30, 0.55, 1.0, 1.0), // bright blue
+                    niri_config::Color::new_unpremul(0.45, 0.75, 1.0, 1.0), // lighter blue
+                    135., // diagonal gradient angle
+                    Rectangle::new(Point::from((0., 0.)), border_size),
+                    bw as f32,
+                    corner_radius,
+                    scale as f32,
+                    1.0,
+                );
+                let elem = MonitorInnerRenderElement::Border(elem);
+                let elem = RescaleRenderElement::from_element(
+                    elem,
+                    Point::from((0, 0)),
+                    1.0,
+                );
+                let elem = RelocateRenderElement::from_element(
+                    elem,
+                    border_pos.to_physical_precise_round(scale),
                     Relocate::Relative,
                 );
                 push(elem);
