@@ -489,7 +489,7 @@ impl State {
                 }
 
                 // EXPOSE INTEGRATION: Handle release of the key that opened expose.
-                // If the key was held for >300ms, close expose (hold-to-peek behavior).
+                // If the key was held for >300ms, confirm selection and close expose.
                 // If released quickly (<300ms), leave expose open (toggle behavior).
                 // This mimics macOS Mission Control: quick press toggles, hold peeks.
                 if !pressed {
@@ -502,7 +502,7 @@ impl State {
                             if hold_duration > Duration::from_millis(300)
                                 && this.niri.layout.is_expose_open()
                             {
-                                this.niri.layout.close_expose();
+                                this.niri.layout.expose_confirm_selection();
                                 this.niri.queue_redraw_all();
                             }
 
