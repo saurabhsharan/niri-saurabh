@@ -4597,15 +4597,35 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     // EXPOSE INTEGRATION: Expose toggle/open/close methods.
-    pub fn toggle_expose(&mut self) {
-        if self.expose_open {
-            self.close_expose();
-        } else {
-            self.open_expose();
+
+    /// Resolve the "current" sentinel for expose app-id filtering.
+    /// Returns the resolved app-id, or None if no filtering should occur.
+    pub fn resolve_expose_app_filter(&self, app_id: Option<&str>) -> Option<String> {
+        match app_id {
+            Some("current") => {
+                // Resolve to the focused window's app_id.
+                if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &self.monitor_set {
+                    monitors[*active_monitor_idx]
+                        .active_window()
+                        .and_then(|w| w.app_id())
+                } else {
+                    None
+                }
+            }
+            Some(id) => Some(id.to_owned()),
+            None => None,
         }
     }
 
-    pub fn open_expose(&mut self) -> bool {
+    pub fn toggle_expose(&mut self, app_id_filter: Option<&str>) {
+        if self.expose_open {
+            self.close_expose();
+        } else {
+            self.open_expose(app_id_filter);
+        }
+    }
+
+    pub fn open_expose(&mut self, app_id_filter: Option<&str>) -> bool {
         if self.expose_open {
             return false;
         }
@@ -4620,7 +4640,7 @@ impl<W: LayoutElement> Layout<W> {
         // Compute the expose layout for the active monitor.
         if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &mut self.monitor_set {
             let mon = &mut monitors[*active_monitor_idx];
-            mon.compute_expose_layout();
+            mon.compute_expose_layout(app_id_filter);
         }
 
         true

@@ -2370,19 +2370,21 @@ impl State {
             // to prevent the click-then-repeat reopening expose in a loop.
             // When the trigger key is NOT tracked (the user pressed the key again as a
             // distinct press), allow toggling normally.
-            Action::ToggleExpose => {
+            Action::ToggleExpose(app_id) => {
                 if self.niri.expose_trigger_key.is_some() {
                     // Key repeat while holding — ignore.
                 } else {
-                    self.niri.layout.toggle_expose();
+                    let filter = self.niri.layout.resolve_expose_app_filter(app_id.as_deref());
+                    self.niri.layout.toggle_expose(filter.as_deref());
                     if !self.niri.layout.is_expose_open() {
                         self.niri.expose_trigger_key = None;
                     }
                     self.niri.queue_redraw_all();
                 }
             }
-            Action::OpenExpose => {
-                if self.niri.layout.open_expose() {
+            Action::OpenExpose(app_id) => {
+                let filter = self.niri.layout.resolve_expose_app_filter(app_id.as_deref());
+                if self.niri.layout.open_expose(filter.as_deref()) {
                     self.niri.queue_redraw_all();
                 }
             }
