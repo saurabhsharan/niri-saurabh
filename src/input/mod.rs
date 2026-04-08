@@ -564,6 +564,53 @@ impl State {
 
                     // EXPOSE INTEGRATION: Hardcoded keybindings when expose is open.
                     if this.niri.keyboard_focus.is_expose() && pressed {
+                        if let Some(raw) = raw {
+                            // Handle navigation keys directly (no formal Action needed).
+                            let direction = match raw {
+                                Keysym::Up | Keysym::k => Some(crate::layout::expose::ExposeDirection::Up),
+                                Keysym::Down | Keysym::j => Some(crate::layout::expose::ExposeDirection::Down),
+                                Keysym::Left | Keysym::h => Some(crate::layout::expose::ExposeDirection::Left),
+                                Keysym::Right | Keysym::l => Some(crate::layout::expose::ExposeDirection::Right),
+                                _ => None,
+                            };
+                            if let Some(dir) = direction {
+                                let mods = modifiers_from_state(*mods);
+                                if mods.is_empty() {
+                                    this.niri.layout.expose_navigate(dir);
+                                    this.niri.queue_redraw_all();
+                                    this.niri.suppressed_keys.insert(key_code);
+                                    return FilterResult::Intercept(None);
+                                }
+                            }
+
+                            // Handle Tab/Shift+Tab for cycling.
+                            if raw == Keysym::Tab {
+                                let mods = modifiers_from_state(*mods);
+                                let dir = if mods.contains(Modifiers::SHIFT) {
+                                    crate::layout::expose::ExposeDirection::Left
+                                } else {
+                                    crate::layout::expose::ExposeDirection::Right
+                                };
+                                this.niri.layout.expose_navigate(dir);
+                                this.niri.queue_redraw_all();
+                                this.niri.suppressed_keys.insert(key_code);
+                                return FilterResult::Intercept(None);
+                            }
+                        }
+
+                        // Enter: confirm selection (focus selected window and close).
+                        if raw == Some(Keysym::Return) {
+                            let mods = modifiers_from_state(*mods);
+                            if mods.is_empty() {
+                                this.niri.layout.expose_confirm_selection();
+                                this.niri.expose_trigger_key = None;
+                                this.niri.queue_redraw_all();
+                                this.niri.suppressed_keys.insert(key_code);
+                                return FilterResult::Intercept(None);
+                            }
+                        }
+
+                        // Escape: close expose without changing focus.
                         if let Some(bind) = raw.and_then(|raw| hardcoded_expose_bind(raw, *mods))
                         {
                             this.niri.suppressed_keys.insert(key_code);
@@ -4797,7 +4844,7 @@ fn hardcoded_expose_bind(raw: Keysym, mods: ModifiersState) -> Option<Bind> {
     }
 
     let action = match raw {
-        Keysym::Escape | Keysym::Return => Action::CloseExpose,
+        Keysym::Escape => Action::CloseExpose,
         _ => {
             return None;
         }

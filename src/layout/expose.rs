@@ -32,10 +32,26 @@ pub struct ExposedWindow<Id> {
     pub tile_size: Size<f64, Logical>,
 }
 
+/// Direction for keyboard navigation in the expose grid.
+#[derive(Debug, Clone, Copy)]
+pub enum ExposeDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 /// The complete expose layout for one workspace.
 #[derive(Debug, Clone)]
 pub struct ExposeLayout<Id> {
     pub windows: Vec<ExposedWindow<Id>>,
+    /// Number of columns in the grid.
+    pub cols: usize,
+    /// Number of rows in the grid.
+    pub rows: usize,
+    /// Currently selected window index (for keyboard navigation).
+    /// Independent of Niri's focused window state.
+    pub selected_idx: usize,
 }
 
 impl<Id: Clone + PartialEq> ExposeLayout<Id> {
@@ -54,6 +70,9 @@ impl<Id: Clone + PartialEq> ExposeLayout<Id> {
         if n == 0 {
             return Self {
                 windows: Vec::new(),
+                cols: 0,
+                rows: 0,
+                selected_idx: 0,
             };
         }
 
@@ -77,6 +96,9 @@ impl<Id: Clone + PartialEq> ExposeLayout<Id> {
             // Screen too small for padding — just return empty.
             return Self {
                 windows: Vec::new(),
+                cols: 0,
+                rows: 0,
+                selected_idx: 0,
             };
         }
 
@@ -153,7 +175,95 @@ impl<Id: Clone + PartialEq> ExposeLayout<Id> {
             })
             .collect();
 
-        Self { windows: exposed }
+        Self {
+            windows: exposed,
+            cols,
+            rows,
+            selected_idx: 0,
+        }
+    }
+
+    /// Set the selected index to the window matching `id`, or 0 if not found.
+    pub fn select_by_id(&mut self, id: &Id) {
+        self.selected_idx = self
+            .windows
+            .iter()
+            .position(|w| w.id == *id)
+            .unwrap_or(0);
+    }
+
+    /// Get the id of the currently selected window.
+    pub fn selected_id(&self) -> Option<&Id> {
+        self.windows.get(self.selected_idx).map(|w| &w.id)
+    }
+
+    /// Navigate in the given direction, wrapping around edges.
+    pub fn navigate(&mut self, direction: ExposeDirection) {
+        let n = self.windows.len();
+        if n == 0 {
+            return;
+        }
+
+        let row = self.selected_idx / self.cols;
+        let col = self.selected_idx % self.cols;
+
+        let new_idx = match direction {
+            ExposeDirection::Left => {
+                if self.selected_idx == 0 {
+                    n - 1
+                } else {
+                    self.selected_idx - 1
+                }
+            }
+            ExposeDirection::Right => {
+                if self.selected_idx + 1 >= n {
+                    0
+                } else {
+                    self.selected_idx + 1
+                }
+            }
+            ExposeDirection::Up => {
+                // Go to the same column in the previous row, wrapping to bottom.
+                let mut target_row = if row == 0 { self.rows - 1 } else { row - 1 };
+                loop {
+                    let idx = target_row * self.cols + col;
+                    if idx < n {
+                        break idx;
+                    }
+                    // Last row might not have this column; go up one more.
+                    if target_row == 0 {
+                        target_row = self.rows - 1;
+                    } else {
+                        target_row -= 1;
+                    }
+                    if target_row == row {
+                        // Wrapped all the way around; stay put.
+                        break self.selected_idx;
+                    }
+                }
+            }
+            ExposeDirection::Down => {
+                // Go to the same column in the next row, wrapping to top.
+                let mut target_row = if row + 1 >= self.rows { 0 } else { row + 1 };
+                loop {
+                    let idx = target_row * self.cols + col;
+                    if idx < n {
+                        break idx;
+                    }
+                    // Last row might not have this column; wrap to top.
+                    if target_row + 1 >= self.rows {
+                        target_row = 0;
+                    } else {
+                        target_row += 1;
+                    }
+                    if target_row == row {
+                        break self.selected_idx;
+                    }
+                }
+            }
+        };
+
+        self.selected_idx = new_idx;
     }
 
     /// Find which window is under the given point (in output-logical coordinates).
