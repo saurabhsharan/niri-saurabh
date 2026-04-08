@@ -328,6 +328,8 @@ pub struct Niri {
     // On release: if held >300ms, close expose (hold-to-peek). If released quickly, expose
     // stays open (toggle behavior, closed via Escape/click/re-press).
     pub expose_trigger_key: Option<(Keycode, Duration)>,
+    /// Track the Space key for expose window preview hold-to-dismiss.
+    pub expose_preview_key: Option<(Keycode, Duration)>,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
@@ -2519,6 +2521,7 @@ impl Niri {
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             expose_trigger_key: None,
+            expose_preview_key: None,
             layer_shell_on_demand_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
