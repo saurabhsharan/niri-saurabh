@@ -1528,7 +1528,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     // EXPOSE INTEGRATION: Compute and manage the expose grid layout.
-    pub(super) fn compute_expose_layout(&mut self) {
+    pub(super) fn compute_expose_layout(&mut self, app_id_filter: Option<&str>) {
         let ws = &self.workspaces[self.active_workspace_idx];
         let view_size = self.view_size;
 
@@ -1537,6 +1537,12 @@ impl<W: LayoutElement> Monitor<W> {
 
         let windows_with_positions = ws
             .tiles_with_render_positions()
+            .filter(|(tile, _, _)| {
+                match app_id_filter {
+                    Some(filter) => tile.window().app_id().as_deref() == Some(filter),
+                    None => true,
+                }
+            })
             .map(|(tile, pos, _visible)| {
                 (tile.window().id().clone(), pos, tile.tile_size())
             });
