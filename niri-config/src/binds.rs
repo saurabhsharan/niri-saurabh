@@ -372,8 +372,8 @@ pub enum Action {
     OpenOverview,
     CloseOverview,
     // EXPOSE INTEGRATION
-    ToggleExpose,
-    OpenExpose,
+    ToggleExpose(#[knuffel(property(name = "app-id"))] Option<String>),
+    OpenExpose(#[knuffel(property(name = "app-id"))] Option<String>),
     CloseExpose,
     #[knuffel(skip)]
     ToggleWindowUrgent(u64),
@@ -714,8 +714,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::OpenOverview {} => Self::OpenOverview,
             niri_ipc::Action::CloseOverview {} => Self::CloseOverview,
             // EXPOSE INTEGRATION
-            niri_ipc::Action::ToggleExpose {} => Self::ToggleExpose,
-            niri_ipc::Action::OpenExpose {} => Self::OpenExpose,
+            niri_ipc::Action::ToggleExpose { app_id } => Self::ToggleExpose(app_id),
+            niri_ipc::Action::OpenExpose { app_id } => Self::OpenExpose(app_id),
             niri_ipc::Action::CloseExpose {} => Self::CloseExpose,
             niri_ipc::Action::ToggleWindowUrgent { id } => Self::ToggleWindowUrgent(id),
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),

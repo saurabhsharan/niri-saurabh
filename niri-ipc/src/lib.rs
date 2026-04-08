@@ -917,9 +917,17 @@ pub enum Action {
     /// Close the Overview.
     CloseOverview {},
     /// Toggle (open/close) Expose (show all windows on current workspace in a grid).
-    ToggleExpose {},
+    ToggleExpose {
+        /// Optional app-id to filter windows. Use "current" for the focused window's app.
+        #[cfg_attr(feature = "clap", arg(long))]
+        app_id: Option<String>,
+    },
     /// Open Expose.
-    OpenExpose {},
+    OpenExpose {
+        /// Optional app-id to filter windows. Use "current" for the focused window's app.
+        #[cfg_attr(feature = "clap", arg(long))]
+        app_id: Option<String>,
+    },
     /// Close Expose.
     CloseExpose {},
     /// Toggle urgent status of a window.
