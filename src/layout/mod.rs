@@ -338,6 +338,8 @@ pub struct Layout<W: LayoutElement> {
     // EXPOSE INTEGRATION
     /// Whether expose is open (shows all windows on active workspace in a grid).
     expose_open: bool,
+    /// If expose is filtered to a specific app, stores the app-id.
+    expose_app_filter: Option<String>,
     /// Configurable properties of the layout.
     options: Rc<Options>,
 }
@@ -676,6 +678,7 @@ impl<W: LayoutElement> Layout<W> {
             overview_open: false,
             overview_progress: None,
             expose_open: false,
+            expose_app_filter: None,
             options: Rc::new(options),
         }
     }
@@ -702,6 +705,7 @@ impl<W: LayoutElement> Layout<W> {
             overview_open: false,
             overview_progress: None,
             expose_open: false,
+            expose_app_filter: None,
             options: opts,
         }
     }
@@ -4636,6 +4640,7 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         self.expose_open = true;
+        self.expose_app_filter = app_id_filter.map(|s| s.to_owned());
 
         // Compute the expose layout for the active monitor.
         if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &mut self.monitor_set {
@@ -4651,6 +4656,7 @@ impl<W: LayoutElement> Layout<W> {
             return false;
         }
         self.expose_open = false;
+        self.expose_app_filter = None;
 
         if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
             for mon in monitors {
@@ -4663,6 +4669,50 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn is_expose_open(&self) -> bool {
         self.expose_open
+    }
+
+    /// Returns the current app-id filter if expose is in app-filtered mode.
+    pub fn expose_app_filter(&self) -> Option<&str> {
+        self.expose_app_filter.as_deref()
+    }
+
+    /// Cycle to the next or previous app in app-filtered expose mode.
+    /// `forward`: true for next app (Tab), false for previous app (Shift+Tab).
+    pub fn expose_cycle_app(&mut self, forward: bool) {
+        let current_filter = match &self.expose_app_filter {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        // Collect sorted unique app_ids from the active workspace.
+        let app_ids: Vec<String> = if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &self.monitor_set {
+            let ws = monitors[*active_monitor_idx].active_workspace_ref();
+            let mut ids: Vec<String> = ws.windows()
+                .filter_map(|w| w.app_id())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        } else {
+            return;
+        };
+
+        if app_ids.is_empty() {
+            return;
+        }
+
+        // Find the current app and cycle.
+        let current_idx = app_ids.iter().position(|id| *id == current_filter).unwrap_or(0);
+        let new_idx = if forward {
+            (current_idx + 1) % app_ids.len()
+        } else {
+            (current_idx + app_ids.len() - 1) % app_ids.len()
+        };
+        let new_filter = app_ids[new_idx].clone();
+
+        // Close and reopen with the new filter.
+        self.close_expose();
+        self.open_expose(Some(&new_filter));
     }
 
     /// Focus a window by id (used when clicking in expose) and close expose.
