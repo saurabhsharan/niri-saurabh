@@ -4663,6 +4663,28 @@ impl<W: LayoutElement> Layout<W> {
         self.close_expose();
     }
 
+    /// Navigate the expose selection in the given direction.
+    pub fn expose_navigate(&mut self, direction: expose::ExposeDirection) {
+        if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &mut self.monitor_set {
+            monitors[*active_monitor_idx].expose_navigate(direction);
+        }
+    }
+
+    /// Focus the currently selected expose window and close expose.
+    pub fn expose_confirm_selection(&mut self) {
+        let selected_id = if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &self.monitor_set {
+            monitors[*active_monitor_idx].expose_selected_id().cloned()
+        } else {
+            None
+        };
+
+        if let Some(id) = selected_id {
+            self.expose_focus_window(&id);
+        } else {
+            self.close_expose();
+        }
+    }
+
     pub fn toggle_overview_to_workspace(&mut self, ws_idx: usize) {
         let config = self.options.animations.overview_open_close.0;
         if let Some(mon) = self.active_monitor() {
