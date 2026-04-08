@@ -59,6 +59,7 @@ pub enum ScreenshotUi {
         selection: (Output, Point<i32, Physical>, Point<i32, Physical>),
         output_data: HashMap<Output, OutputData>,
         button: Button,
+        alt_down: bool,
         show_pointer: bool,
         open_anim: Animation,
         clock: Clock,
@@ -76,11 +77,18 @@ pub struct MoveState {
     touch_slot: Option<TouchSlot>,
 }
 
+pub enum ResizeAnchor {
+    Corner(Point<i32, Physical>),
+    // Stored as the sum of both corners so center-based resizing preserves even-sized selections.
+    CenterSum(Point<i32, Physical>),
+}
+
 pub enum Button {
     Up,
     Down {
         touch_slot: Option<TouchSlot>,
         on_capture_button: bool,
+        anchor: ResizeAnchor,
         last_pos: (Output, Point<i32, Physical>),
         move_state: Option<MoveState>,
     },
@@ -123,6 +131,34 @@ impl Button {
                 ..
             }
         )
+    }
+}
+
+impl ResizeAnchor {
+    fn new(point: Point<i32, Physical>, resize_from_center: bool) -> Self {
+        if resize_from_center {
+            Self::CenterSum(point + point)
+        } else {
+            Self::Corner(point)
+        }
+    }
+
+    fn from_selection(
+        selection: &(Output, Point<i32, Physical>, Point<i32, Physical>),
+        resize_from_center: bool,
+    ) -> Self {
+        if resize_from_center {
+            Self::CenterSum(selection.1 + selection.2)
+        } else {
+            Self::Corner(selection.1)
+        }
+    }
+
+    fn translate(&mut self, delta: Point<i32, Physical>) {
+        match self {
+            Self::Corner(anchor) => *anchor += delta,
+            Self::CenterSum(center_sum) => *center_sum += delta + delta,
+        }
     }
 }
 
@@ -233,6 +269,7 @@ impl ScreenshotUi {
             selection,
             output_data,
             button: Button::Up,
+            alt_down: false,
             show_pointer,
             open_anim,
             clock: clock.clone(),
@@ -308,6 +345,32 @@ impl ScreenshotUi {
                     *move_state = None;
                 }
             }
+        }
+    }
+
+    pub fn set_alt_down(&mut self, down: bool) {
+        if let Self::Open {
+            alt_down,
+            selection,
+            button:
+                Button::Down {
+                    on_capture_button,
+                    anchor,
+                    move_state,
+                    ..
+                },
+            ..
+        } = self
+        {
+            if *alt_down != down {
+                *alt_down = down;
+
+                if !*on_capture_button && move_state.is_none() {
+                    *anchor = ResizeAnchor::from_selection(selection, *alt_down);
+                }
+            }
+        } else if let Self::Open { alt_down, .. } = self {
+            *alt_down = down;
         }
     }
 
@@ -800,45 +863,51 @@ impl ScreenshotUi {
 
     /// The pointer has moved to `point` relative to the current selection output.
     pub fn pointer_motion(&mut self, point: Point<i32, Physical>, slot: Option<TouchSlot>) {
-        let Self::Open {
-            selection,
-            output_data,
-            button:
-                Button::Down {
-                    touch_slot,
-                    on_capture_button,
-                    last_pos,
-                    move_state,
-                },
-            ..
-        } = self
-        else {
-            return;
-        };
+        {
+            let Self::Open {
+                selection,
+                output_data,
+                alt_down,
+                button:
+                    Button::Down {
+                        touch_slot,
+                        on_capture_button,
+                        anchor,
+                        last_pos,
+                        move_state,
+                    },
+                ..
+            } = self
+            else {
+                return;
+            };
 
-        if *touch_slot != slot {
-            return;
-        }
+            if *touch_slot != slot {
+                return;
+            }
 
-        last_pos.1 = point;
+            last_pos.1 = point;
 
-        if *on_capture_button {
-            return;
-        }
+            if *on_capture_button {
+                return;
+            }
 
-        if let Some(move_state) = move_state {
-            // The cursor offset is relative to selection.1.
-            let delta = point - (selection.1 + move_state.pointer_offset);
+            if let Some(move_state) = move_state {
+                // The cursor offset is relative to selection.1.
+                let delta = point - (selection.1 + move_state.pointer_offset);
 
-            let desired = rect_from_corner_points(selection.1 + delta, selection.2 + delta);
-            let bounds = Rectangle::from_size(output_data[&selection.0].size - desired.size);
-            let clamped_loc = desired.loc.constrain(bounds);
+                let desired = rect_from_corner_points(selection.1 + delta, selection.2 + delta);
+                let bounds = Rectangle::from_size(output_data[&selection.0].size - desired.size);
+                let clamped_loc = desired.loc.constrain(bounds);
 
-            let delta = clamped_loc - rect_from_corner_points(selection.1, selection.2).loc;
-            selection.1 += delta;
-            selection.2 += delta;
-        } else {
-            selection.2 = point;
+                let delta = clamped_loc - rect_from_corner_points(selection.1, selection.2).loc;
+                anchor.translate(delta);
+                selection.1 += delta;
+                selection.2 += delta;
+            } else {
+                let output_size = output_data[&selection.0].size;
+                update_selection_for_drag(selection, anchor, point, output_size, *alt_down);
+            }
         }
 
         self.update_buffers();
@@ -853,6 +922,7 @@ impl ScreenshotUi {
         let Self::Open {
             selection,
             output_data,
+            alt_down,
             show_pointer,
             button,
             ..
@@ -896,6 +966,7 @@ impl ScreenshotUi {
                 *button = Button::Down {
                     touch_slot: slot,
                     on_capture_button: true,
+                    anchor: ResizeAnchor::new(point, *alt_down),
                     last_pos: (output, point),
                     move_state: None,
                 };
@@ -906,6 +977,7 @@ impl ScreenshotUi {
         *button = Button::Down {
             touch_slot: slot,
             on_capture_button: false,
+            anchor: ResizeAnchor::new(point, *alt_down),
             last_pos: (output.clone(), point),
             move_state: None,
         };
@@ -1081,6 +1153,36 @@ pub fn rect_from_corner_points(
     // We're adding + 1 because the pointer is clamped to output size - 1, so to get the full
     // screen worth of selection we must add back that + 1.
     Rectangle::from_extremities((x1, y1), (x2 + 1, y2 + 1))
+}
+
+fn update_selection_for_drag(
+    selection: &mut (Output, Point<i32, Physical>, Point<i32, Physical>),
+    anchor: &ResizeAnchor,
+    point: Point<i32, Physical>,
+    output_size: Size<i32, Physical>,
+    resize_from_center: bool,
+) {
+    if !resize_from_center {
+        let ResizeAnchor::Corner(anchor) = anchor else {
+            unreachable!("normal selection drag requires a corner anchor");
+        };
+        selection.1 = *anchor;
+        selection.2 = point;
+        return;
+    }
+
+    let ResizeAnchor::CenterSum(center_sum) = anchor else {
+        unreachable!("centered selection drag requires a center anchor");
+    };
+
+    let min_x = max(0, center_sum.x - (output_size.w - 1));
+    let max_x = min(output_size.w - 1, center_sum.x);
+    let min_y = max(0, center_sum.y - (output_size.h - 1));
+    let max_y = min(output_size.h - 1, center_sum.y);
+    let point = Point::from((point.x.clamp(min_x, max_x), point.y.clamp(min_y, max_y)));
+
+    selection.1 = *center_sum - point;
+    selection.2 = point;
 }
 
 fn panel_location(output_data: &OutputData, panel_size: Size<i32, Buffer>) -> Point<i32, Physical> {
