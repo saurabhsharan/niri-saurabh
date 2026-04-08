@@ -623,18 +623,28 @@ impl State {
                                 }
                             }
 
-                            // Handle Tab/Shift+Tab for cycling.
+                            // Handle Tab/Shift+Tab:
+                            // - App Expose (filtered): cycle through apps
+                            // - All Expose (unfiltered): cycle through windows
                             if raw == Keysym::Tab {
                                 let mods = modifiers_from_state(*mods);
-                                let dir = if mods.contains(Modifiers::SHIFT) {
-                                    crate::layout::expose::ExposeDirection::Left
-                                } else {
-                                    crate::layout::expose::ExposeDirection::Right
-                                };
-                                this.niri.layout.expose_navigate(dir);
-                                this.niri.queue_redraw_all();
-                                this.niri.suppressed_keys.insert(key_code);
-                                return FilterResult::Intercept(None);
+                                let shift = mods.contains(Modifiers::SHIFT);
+                                let only_shift = mods == Modifiers::SHIFT;
+                                if mods.is_empty() || only_shift {
+                                    if this.niri.layout.expose_app_filter().is_some() {
+                                        this.niri.layout.expose_cycle_app(!shift);
+                                    } else {
+                                        let dir = if shift {
+                                            crate::layout::expose::ExposeDirection::Left
+                                        } else {
+                                            crate::layout::expose::ExposeDirection::Right
+                                        };
+                                        this.niri.layout.expose_navigate(dir);
+                                    }
+                                    this.niri.queue_redraw_all();
+                                    this.niri.suppressed_keys.insert(key_code);
+                                    return FilterResult::Intercept(None);
+                                }
                             }
                         }
 
