@@ -512,6 +512,10 @@ impl State {
                     this.niri.screenshot_ui.set_alt_down(pressed);
                 }
 
+                if matches!(raw, Some(Keysym::Shift_L | Keysym::Shift_R)) {
+                    this.niri.screenshot_ui.set_shift_down(pressed);
+                }
+
                 let res = {
                     let config = this.niri.config.borrow();
                     let bindings =
