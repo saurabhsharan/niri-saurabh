@@ -31,6 +31,7 @@ use crate::render_helpers::{render_to_texture, RenderTarget};
 use crate::utils::to_physical_precise_round;
 
 const SELECTION_BORDER: i32 = 2;
+const AXIS_LOCK_THRESHOLD: i32 = 8;
 
 const PADDING: i32 = 8;
 const RADIUS: i32 = 16;
@@ -60,6 +61,7 @@ pub enum ScreenshotUi {
         output_data: HashMap<Output, OutputData>,
         button: Button,
         alt_down: bool,
+        shift_down: bool,
         show_pointer: bool,
         open_anim: Animation,
         clock: Clock,
@@ -83,12 +85,31 @@ pub enum ResizeAnchor {
     CenterSum(Point<i32, Physical>),
 }
 
+#[derive(Clone, Copy)]
+pub enum ResizeAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy)]
+pub enum AxisLock {
+    Pending {
+        base_selection: (Point<i32, Physical>, Point<i32, Physical>),
+        origin: Point<i32, Physical>,
+    },
+    Locked {
+        base_selection: (Point<i32, Physical>, Point<i32, Physical>),
+        axis: ResizeAxis,
+    },
+}
+
 pub enum Button {
     Up,
     Down {
         touch_slot: Option<TouchSlot>,
         on_capture_button: bool,
         anchor: ResizeAnchor,
+        axis_lock: Option<AxisLock>,
         last_pos: (Output, Point<i32, Physical>),
         move_state: Option<MoveState>,
     },
@@ -158,6 +179,49 @@ impl ResizeAnchor {
         match self {
             Self::Corner(anchor) => *anchor += delta,
             Self::CenterSum(center_sum) => *center_sum += delta + delta,
+        }
+    }
+}
+
+impl AxisLock {
+    fn new(a: Point<i32, Physical>, b: Point<i32, Physical>, origin: Point<i32, Physical>) -> Self {
+        Self::Pending {
+            base_selection: (a, b),
+            origin,
+        }
+    }
+
+    fn base_selection(&self) -> (Point<i32, Physical>, Point<i32, Physical>) {
+        match *self {
+            Self::Pending { base_selection, .. } | Self::Locked { base_selection, .. } => {
+                base_selection
+            }
+        }
+    }
+
+    fn axis(&mut self, point: Point<i32, Physical>, threshold: i32) -> Option<ResizeAxis> {
+        match *self {
+            Self::Pending {
+                base_selection,
+                origin,
+            } => {
+                let delta = point - origin;
+                if max(delta.x.abs(), delta.y.abs()) < threshold {
+                    None
+                } else {
+                    let axis = if delta.x.abs() >= delta.y.abs() {
+                        ResizeAxis::Horizontal
+                    } else {
+                        ResizeAxis::Vertical
+                    };
+                    *self = Self::Locked {
+                        base_selection,
+                        axis,
+                    };
+                    Some(axis)
+                }
+            }
+            Self::Locked { axis, .. } => Some(axis),
         }
     }
 }
@@ -270,6 +334,7 @@ impl ScreenshotUi {
             output_data,
             button: Button::Up,
             alt_down: false,
+            shift_down: false,
             show_pointer,
             open_anim,
             clock: clock.clone(),
@@ -320,8 +385,10 @@ impl ScreenshotUi {
     pub fn set_space_down(&mut self, down: bool) {
         if let Self::Open {
             selection,
+            shift_down,
             button:
                 Button::Down {
+                    axis_lock,
                     move_state,
                     last_pos,
                     ..
@@ -335,6 +402,7 @@ impl ScreenshotUi {
                         pointer_offset: last_pos.1 - selection.1,
                         touch_slot: None,
                     });
+                    *axis_lock = None;
                 }
             } else {
                 // Only clear if moving with Space.
@@ -343,6 +411,9 @@ impl ScreenshotUi {
                 }) = move_state
                 {
                     *move_state = None;
+                    if *shift_down {
+                        *axis_lock = Some(AxisLock::new(selection.1, selection.2, last_pos.1));
+                    }
                 }
             }
         }
@@ -371,6 +442,33 @@ impl ScreenshotUi {
             }
         } else if let Self::Open { alt_down, .. } = self {
             *alt_down = down;
+        }
+    }
+
+    pub fn set_shift_down(&mut self, down: bool) {
+        if let Self::Open {
+            shift_down,
+            selection,
+            button:
+                Button::Down {
+                    on_capture_button,
+                    axis_lock,
+                    last_pos,
+                    move_state,
+                    ..
+                },
+            ..
+        } = self
+        {
+            if *shift_down != down {
+                *shift_down = down;
+
+                if !*on_capture_button && move_state.is_none() {
+                    *axis_lock = down.then(|| AxisLock::new(selection.1, selection.2, last_pos.1));
+                }
+            }
+        } else if let Self::Open { shift_down, .. } = self {
+            *shift_down = down;
         }
     }
 
@@ -868,11 +966,13 @@ impl ScreenshotUi {
                 selection,
                 output_data,
                 alt_down,
+                shift_down,
                 button:
                     Button::Down {
                         touch_slot,
                         on_capture_button,
                         anchor,
+                        axis_lock,
                         last_pos,
                         move_state,
                     },
@@ -905,8 +1005,36 @@ impl ScreenshotUi {
                 selection.1 += delta;
                 selection.2 += delta;
             } else {
-                let output_size = output_data[&selection.0].size;
-                update_selection_for_drag(selection, anchor, point, output_size, *alt_down);
+                let data = &output_data[&selection.0];
+
+                let axis_constraint = if *shift_down {
+                    let axis_lock = axis_lock
+                        .get_or_insert_with(|| AxisLock::new(selection.1, selection.2, point));
+                    let threshold = axis_lock_threshold(data.scale);
+                    axis_lock
+                        .axis(point, threshold)
+                        .map(|axis| (axis, axis_lock.base_selection()))
+                } else {
+                    axis_lock.take();
+                    None
+                };
+
+                if *shift_down && axis_constraint.is_none() {
+                    if let Some(axis_lock) = axis_lock {
+                        let (a, b) = axis_lock.base_selection();
+                        selection.1 = a;
+                        selection.2 = b;
+                    }
+                } else {
+                    update_selection_for_drag(
+                        selection,
+                        anchor,
+                        point,
+                        data.size,
+                        *alt_down,
+                        axis_constraint,
+                    );
+                }
             }
         }
 
@@ -923,6 +1051,7 @@ impl ScreenshotUi {
             selection,
             output_data,
             alt_down,
+            shift_down,
             show_pointer,
             button,
             ..
@@ -935,6 +1064,7 @@ impl ScreenshotUi {
         if let Some(new_slot) = slot {
             if let Button::Down {
                 on_capture_button: false,
+                axis_lock,
                 move_state,
                 last_pos,
                 ..
@@ -945,6 +1075,7 @@ impl ScreenshotUi {
                         pointer_offset: last_pos.1 - selection.1,
                         touch_slot: Some(new_slot),
                     });
+                    *axis_lock = None;
                 }
             }
         }
@@ -967,6 +1098,7 @@ impl ScreenshotUi {
                     touch_slot: slot,
                     on_capture_button: true,
                     anchor: ResizeAnchor::new(point, *alt_down),
+                    axis_lock: None,
                     last_pos: (output, point),
                     move_state: None,
                 };
@@ -978,6 +1110,7 @@ impl ScreenshotUi {
             touch_slot: slot,
             on_capture_button: false,
             anchor: ResizeAnchor::new(point, *alt_down),
+            axis_lock: (*shift_down).then(|| AxisLock::new(point, point, point)),
             last_pos: (output.clone(), point),
             move_state: None,
         };
@@ -992,6 +1125,7 @@ impl ScreenshotUi {
         let Self::Open {
             selection,
             output_data,
+            shift_down,
             button,
             show_pointer,
             ..
@@ -1004,6 +1138,7 @@ impl ScreenshotUi {
             touch_slot,
             on_capture_button,
             ref last_pos,
+            ref mut axis_lock,
             ref mut move_state,
             ..
         } = *button
@@ -1015,6 +1150,9 @@ impl ScreenshotUi {
         if let Some(state) = move_state {
             if state.touch_slot.is_some_and(|m_slot| Some(m_slot) == slot) {
                 *move_state = None;
+                if *shift_down {
+                    *axis_lock = Some(AxisLock::new(selection.1, selection.2, last_pos.1));
+                }
                 return None;
             }
         };
@@ -1161,6 +1299,7 @@ fn update_selection_for_drag(
     point: Point<i32, Physical>,
     output_size: Size<i32, Physical>,
     resize_from_center: bool,
+    axis_constraint: Option<(ResizeAxis, (Point<i32, Physical>, Point<i32, Physical>))>,
 ) {
     if !resize_from_center {
         let ResizeAnchor::Corner(anchor) = anchor else {
@@ -1168,21 +1307,37 @@ fn update_selection_for_drag(
         };
         selection.1 = *anchor;
         selection.2 = point;
-        return;
+    } else {
+        let ResizeAnchor::CenterSum(center_sum) = anchor else {
+            unreachable!("centered selection drag requires a center anchor");
+        };
+
+        let min_x = max(0, center_sum.x - (output_size.w - 1));
+        let max_x = min(output_size.w - 1, center_sum.x);
+        let min_y = max(0, center_sum.y - (output_size.h - 1));
+        let max_y = min(output_size.h - 1, center_sum.y);
+        let point = Point::from((point.x.clamp(min_x, max_x), point.y.clamp(min_y, max_y)));
+
+        selection.1 = *center_sum - point;
+        selection.2 = point;
     }
 
-    let ResizeAnchor::CenterSum(center_sum) = anchor else {
-        unreachable!("centered selection drag requires a center anchor");
-    };
+    if let Some((axis, (base_a, base_b))) = axis_constraint {
+        match axis {
+            ResizeAxis::Horizontal => {
+                selection.1.y = base_a.y;
+                selection.2.y = base_b.y;
+            }
+            ResizeAxis::Vertical => {
+                selection.1.x = base_a.x;
+                selection.2.x = base_b.x;
+            }
+        }
+    }
+}
 
-    let min_x = max(0, center_sum.x - (output_size.w - 1));
-    let max_x = min(output_size.w - 1, center_sum.x);
-    let min_y = max(0, center_sum.y - (output_size.h - 1));
-    let max_y = min(output_size.h - 1, center_sum.y);
-    let point = Point::from((point.x.clamp(min_x, max_x), point.y.clamp(min_y, max_y)));
-
-    selection.1 = *center_sum - point;
-    selection.2 = point;
+fn axis_lock_threshold(scale: f64) -> i32 {
+    max(1, to_physical_precise_round(scale, AXIS_LOCK_THRESHOLD))
 }
 
 fn panel_location(output_data: &OutputData, panel_size: Size<i32, Buffer>) -> Point<i32, Physical> {
