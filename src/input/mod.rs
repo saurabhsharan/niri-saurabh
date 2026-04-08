@@ -548,6 +548,10 @@ impl State {
                     this.niri.screenshot_ui.set_space_down(pressed);
                 }
 
+                if matches!(raw, Some(Keysym::Alt_L | Keysym::Alt_R)) {
+                    this.niri.screenshot_ui.set_alt_down(pressed);
+                }
+
                 if pressed && !this.niri.screenshot_ui.is_open() && !is_inhibiting_shortcuts {
                     if let Some(raw) = raw {
                         let config = this.niri.config.borrow();
