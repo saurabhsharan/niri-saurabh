@@ -527,6 +527,25 @@ impl State {
                             return FilterResult::Intercept(None);
                         }
                     }
+
+                    // EXPOSE INTEGRATION: Handle release of Space for preview hold-to-dismiss.
+                    if let Some((preview_code, preview_time)) = this.niri.expose_preview_key {
+                        if key_code == preview_code {
+                            this.niri.expose_preview_key = None;
+
+                            let hold_duration = Duration::from_micros(event.time())
+                                .saturating_sub(preview_time);
+                            if hold_duration > Duration::from_millis(300)
+                                && this.niri.layout.expose_preview_id().is_some()
+                            {
+                                this.niri.layout.expose_close_preview();
+                                this.niri.queue_redraw_all();
+                            }
+
+                            this.niri.suppressed_keys.remove(&key_code);
+                            return FilterResult::Intercept(None);
+                        }
+                    }
                 }
 
                 if pressed
@@ -604,63 +623,122 @@ impl State {
 
                     // EXPOSE INTEGRATION: Hardcoded keybindings when expose is open.
                     if this.niri.keyboard_focus.is_expose() && pressed {
+                        let in_preview = this.niri.layout.expose_preview_id().is_some();
+
                         if let Some(raw) = raw {
-                            // Handle navigation keys directly (no formal Action needed).
-                            let direction = match raw {
-                                Keysym::Up | Keysym::k => Some(crate::layout::expose::ExposeDirection::Up),
-                                Keysym::Down | Keysym::j => Some(crate::layout::expose::ExposeDirection::Down),
-                                Keysym::Left | Keysym::h => Some(crate::layout::expose::ExposeDirection::Left),
-                                Keysym::Right | Keysym::l => Some(crate::layout::expose::ExposeDirection::Right),
-                                _ => None,
-                            };
-                            if let Some(dir) = direction {
+                            // Space: toggle window preview (zoom) under cursor.
+                            if raw == Keysym::space {
                                 let mods = modifiers_from_state(*mods);
                                 if mods.is_empty() {
-                                    this.niri.layout.expose_navigate(dir);
-                                    this.niri.queue_redraw_all();
-                                    this.niri.suppressed_keys.insert(key_code);
-                                    return FilterResult::Intercept(None);
-                                }
-                            }
-
-                            // Handle Tab/Shift+Tab:
-                            // - App Expose (filtered): cycle through apps
-                            // - All Expose (unfiltered): cycle through windows
-                            if raw == Keysym::Tab {
-                                let mods = modifiers_from_state(*mods);
-                                let shift = mods.contains(Modifiers::SHIFT);
-                                let only_shift = mods == Modifiers::SHIFT;
-                                if mods.is_empty() || only_shift {
-                                    if this.niri.layout.expose_app_filter().is_some() {
-                                        this.niri.layout.expose_cycle_app(!shift);
+                                    if in_preview {
+                                        // Close the preview (toggle off).
+                                        this.niri.layout.expose_close_preview();
+                                        this.niri.expose_preview_key = None;
                                     } else {
-                                        let dir = if shift {
-                                            crate::layout::expose::ExposeDirection::Left
-                                        } else {
-                                            crate::layout::expose::ExposeDirection::Right
-                                        };
-                                        this.niri.layout.expose_navigate(dir);
+                                        // Preview the window under the cursor.
+                                        let pointer = this.niri.seat.get_pointer().unwrap();
+                                        let pointer_loc = pointer.current_location();
+                                        if let Some((output, pos_within_output)) =
+                                            this.niri.output_under(pointer_loc)
+                                        {
+                                            let output = output.clone();
+                                            this.niri.layout.expose_toggle_preview_at(
+                                                pos_within_output,
+                                                &output,
+                                            );
+                                        }
+                                        // Record Space key for hold-to-dismiss.
+                                        if this.niri.layout.expose_preview_id().is_some() {
+                                            let time = Duration::from_micros(event.time());
+                                            this.niri.expose_preview_key =
+                                                Some((key_code, time));
+                                        }
                                     }
                                     this.niri.queue_redraw_all();
                                     this.niri.suppressed_keys.insert(key_code);
                                     return FilterResult::Intercept(None);
                                 }
                             }
+
+                            // Navigation keys (only when not in preview).
+                            if !in_preview {
+                                let direction = match raw {
+                                    Keysym::Up | Keysym::k => Some(crate::layout::expose::ExposeDirection::Up),
+                                    Keysym::Down | Keysym::j => Some(crate::layout::expose::ExposeDirection::Down),
+                                    Keysym::Left | Keysym::h => Some(crate::layout::expose::ExposeDirection::Left),
+                                    Keysym::Right | Keysym::l => Some(crate::layout::expose::ExposeDirection::Right),
+                                    _ => None,
+                                };
+                                if let Some(dir) = direction {
+                                    let mods = modifiers_from_state(*mods);
+                                    if mods.is_empty() {
+                                        this.niri.layout.expose_navigate(dir);
+                                        this.niri.queue_redraw_all();
+                                        this.niri.suppressed_keys.insert(key_code);
+                                        return FilterResult::Intercept(None);
+                                    }
+                                }
+
+                                // Handle Tab/Shift+Tab:
+                                // - App Expose (filtered): cycle through apps
+                                // - All Expose (unfiltered): cycle through windows
+                                if raw == Keysym::Tab {
+                                    let mods = modifiers_from_state(*mods);
+                                    let shift = mods.contains(Modifiers::SHIFT);
+                                    let only_shift = mods == Modifiers::SHIFT;
+                                    if mods.is_empty() || only_shift {
+                                        if this.niri.layout.expose_app_filter().is_some() {
+                                            this.niri.layout.expose_cycle_app(!shift);
+                                        } else {
+                                            let dir = if shift {
+                                                crate::layout::expose::ExposeDirection::Left
+                                            } else {
+                                                crate::layout::expose::ExposeDirection::Right
+                                            };
+                                            this.niri.layout.expose_navigate(dir);
+                                        }
+                                        this.niri.queue_redraw_all();
+                                        this.niri.suppressed_keys.insert(key_code);
+                                        return FilterResult::Intercept(None);
+                                    }
+                                }
+                            }
                         }
 
-                        // Enter: confirm selection (focus selected window and close).
+                        // Enter: if previewing, focus the previewed window;
+                        // otherwise, confirm the keyboard selection.
                         if raw == Some(Keysym::Return) {
                             let mods = modifiers_from_state(*mods);
                             if mods.is_empty() {
-                                this.niri.layout.expose_confirm_selection();
+                                if in_preview {
+                                    this.niri.layout.expose_confirm_preview();
+                                } else {
+                                    this.niri.layout.expose_confirm_selection();
+                                }
                                 this.niri.expose_trigger_key = None;
+                                this.niri.expose_preview_key = None;
                                 this.niri.queue_redraw_all();
                                 this.niri.suppressed_keys.insert(key_code);
                                 return FilterResult::Intercept(None);
                             }
                         }
 
-                        // Escape: close expose without changing focus.
+                        // Escape: if previewing, close preview and return to expose;
+                        // otherwise, close expose without changing focus.
+                        if raw == Some(Keysym::Escape) {
+                            let mods = modifiers_from_state(*mods);
+                            if mods.is_empty() {
+                                if in_preview {
+                                    this.niri.layout.expose_close_preview();
+                                    this.niri.expose_preview_key = None;
+                                    this.niri.queue_redraw_all();
+                                    this.niri.suppressed_keys.insert(key_code);
+                                    return FilterResult::Intercept(None);
+                                }
+                            }
+                        }
+
+                        // Escape (when not in preview): close expose.
                         if let Some(bind) = raw.and_then(|raw| hardcoded_expose_bind(raw, *mods))
                         {
                             this.niri.suppressed_keys.insert(key_code);
@@ -2480,6 +2558,7 @@ impl State {
             Action::CloseExpose => {
                 if self.niri.layout.close_expose() {
                     self.niri.expose_trigger_key = None;
+                    self.niri.expose_preview_key = None;
                     self.niri.queue_redraw_all();
                 }
             }
@@ -3199,6 +3278,14 @@ impl State {
                 && button_state == ButtonState::Pressed
                 && !pointer.is_grabbed()
             {
+                // If a window is being previewed, any click closes the preview.
+                if self.niri.layout.expose_preview_id().is_some() {
+                    self.niri.layout.expose_close_preview();
+                    self.niri.expose_preview_key = None;
+                    self.niri.queue_redraw_all();
+                    return;
+                }
+
                 let pointer_loc = pointer.current_location();
                 if let Some((output, pos_within_output)) = self.niri.output_under(pointer_loc) {
                     let mon = self.niri.layout.monitor_for_output(&output);

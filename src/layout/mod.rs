@@ -4755,6 +4755,58 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Close the window preview in expose (with animation).
+    pub fn expose_close_preview(&mut self) {
+        if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &mut self.monitor_set {
+            monitors[*active_monitor_idx].expose_close_preview();
+        }
+    }
+
+    /// Returns the previewed window id, if any.
+    pub fn expose_preview_id(&self) -> Option<&W::Id> {
+        if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &self.monitor_set {
+            monitors[*active_monitor_idx].expose_preview_id.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Toggle preview of a window under the cursor.
+    /// Returns true if preview state changed.
+    pub fn expose_toggle_preview_at(&mut self, pos: Point<f64, Logical>, output: &Output) -> bool {
+        let mon = if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            monitors.iter_mut().find(|m| m.output == *output)
+        } else {
+            None
+        };
+        let Some(mon) = mon else { return false };
+
+        if let Some(window_id) = mon.expose_window_at(pos).cloned() {
+            if mon.expose_preview_id.as_ref() == Some(&window_id) {
+                // Already previewing this window — animate close.
+                mon.expose_close_preview();
+            } else {
+                mon.expose_open_preview(window_id);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Focus the previewed window and close expose.
+    pub fn expose_confirm_preview(&mut self) {
+        let preview_id = if let MonitorSet::Normal { monitors, active_monitor_idx, .. } = &self.monitor_set {
+            monitors[*active_monitor_idx].expose_preview_id.clone()
+        } else {
+            None
+        };
+
+        if let Some(id) = preview_id {
+            self.expose_focus_window(&id);
+        }
+    }
+
     pub fn toggle_overview_to_workspace(&mut self, ws_idx: usize) {
         let config = self.options.animations.overview_open_close.0;
         if let Some(mon) = self.active_monitor() {

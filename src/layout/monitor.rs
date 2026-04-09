@@ -21,7 +21,7 @@ use super::workspace::{
 };
 use super::expose::{ExposeDirection, ExposeLayout};
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
-use crate::animation::{Animation, Clock};
+use crate::animation::{Animation, Clock, Curve};
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::niri_render_elements;
 use crate::render_helpers::border::BorderRenderElement;
@@ -60,6 +60,8 @@ const EXPOSE_LABEL_MAX_WIDTH_FRAC: f64 = 0.95;
 const EXPOSE_SELECTION_BORDER_WIDTH: f64 = 4.0;
 /// Corner radius for the selection border.
 const EXPOSE_SELECTION_CORNER_RADIUS: f32 = 10.0;
+/// Fraction of the view size the preview window occupies.
+const EXPOSE_PREVIEW_FILL: f64 = 0.85;
 
 /// Cached expose label textures, keyed by scale to invalidate on scale change.
 #[derive(Debug, Default)]
@@ -202,6 +204,10 @@ pub struct Monitor<W: LayoutElement> {
     /// Cached text label textures for expose windows (title + app_id).
     /// Uses RefCell so render_expose (which takes &self) can lazily populate it.
     expose_label_cache: RefCell<ExposeLabels>,
+    /// Window being previewed (zoomed) in expose, if any.
+    pub(super) expose_preview_id: Option<W::Id>,
+    /// Animation progress for the preview zoom (0 = grid position, 1 = enlarged/centered).
+    expose_preview_anim: Option<Animation>,
     /// Clock for driving animations.
     pub(super) clock: Clock,
     /// Configurable properties of the layout as received from the parent layout.
@@ -470,6 +476,8 @@ impl<W: LayoutElement> Monitor<W> {
             expose_open: false,
             expose_layout: None,
             expose_label_cache: RefCell::new(ExposeLabels::default()),
+            expose_preview_id: None,
+            expose_preview_anim: None,
             workspace_switch: None,
             clock,
             base_options,
@@ -1203,6 +1211,12 @@ impl<W: LayoutElement> Monitor<W> {
             None => (),
         }
 
+        // Clean up expose preview when close animation finishes.
+        if self.expose_preview_closing_done() {
+            self.expose_preview_id = None;
+            self.expose_preview_anim = None;
+        }
+
         for ws in &mut self.workspaces {
             ws.advance_animations();
         }
@@ -1212,6 +1226,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch
             .as_ref()
             .is_some_and(|s| s.is_animation_ongoing())
+            || self.expose_preview_anim.as_ref().is_some_and(|a| !a.is_done())
             || self.workspaces.iter().any(|ws| ws.are_animations_ongoing())
     }
 
@@ -1560,6 +1575,34 @@ impl<W: LayoutElement> Monitor<W> {
         self.expose_open = false;
         self.expose_layout = None;
         self.expose_label_cache.borrow_mut().textures.clear();
+        self.expose_preview_id = None;
+        self.expose_preview_anim = None;
+    }
+
+    /// Open the expose preview for a window (animate zoom in).
+    pub fn expose_open_preview(&mut self, id: W::Id) {
+        self.expose_preview_id = Some(id);
+        self.expose_preview_anim = Some(Animation::ease(
+            self.clock.clone(), 0., 1., 0., 200, Curve::EaseOutCubic,
+        ));
+    }
+
+    /// Close the expose preview (animate zoom out).
+    pub fn expose_close_preview(&mut self) {
+        if self.expose_preview_id.is_some() {
+            self.expose_preview_anim = Some(Animation::ease(
+                self.clock.clone(), 1., 0., 0., 200, Curve::EaseOutCubic,
+            ));
+        }
+    }
+
+    /// Returns true if the preview close animation is done and can be cleaned up.
+    pub fn expose_preview_closing_done(&self) -> bool {
+        if let Some(anim) = &self.expose_preview_anim {
+            anim.to() == 0. && anim.is_done()
+        } else {
+            false
+        }
     }
 
     /// Navigate the expose selection in the given direction.
@@ -1994,27 +2037,42 @@ impl<W: LayoutElement> Monitor<W> {
             }
         }
 
-        for (i, exposed) in expose_layout.windows.iter().enumerate() {
-            // Find the tile in the workspace.
-            let tile_and_pos = ws
-                .tiles_with_render_positions()
-                .find(|(t, _, _)| *t.window().id() == exposed.id);
-            let Some((tile, _orig_pos, _visible)) = tile_and_pos else {
-                continue;
-            };
+        // Get the preview animation progress (0 = grid position, 1 = enlarged/centered).
+        let preview_progress = self.expose_preview_anim
+            .as_ref()
+            .map(|a| a.clamped_value().clamp(0., 1.));
+        let preview_id = self.expose_preview_id.clone();
+        let is_previewing = preview_id.is_some() && preview_progress.is_some();
 
-            let target_pos = super::expose::lerp_point(
-                exposed.original_pos,
-                exposed.target_pos,
-                progress,
-            );
-            let target_scale = super::expose::lerp(1.0, exposed.target_scale, progress);
+        // Precompute preview target position/scale if previewing.
+        let preview_target = if let Some(ref pid) = preview_id {
+            expose_layout.windows.iter().find(|e| e.id == *pid).map(|exposed| {
+                let view = self.view_size;
+                let max_w = view.w * EXPOSE_PREVIEW_FILL;
+                let max_h = view.h * EXPOSE_PREVIEW_FILL;
+                let ps = (max_w / exposed.tile_size.w)
+                    .min(max_h / exposed.tile_size.h)
+                    .min(1.0);
+                let sw = exposed.tile_size.w * ps;
+                let sh = exposed.tile_size.h * ps;
+                let pp = Point::from(((view.w - sw) / 2.0, (view.h - sh) / 2.0));
+                (exposed.target_pos, exposed.target_scale, pp, ps)
+            })
+        } else {
+            None
+        };
 
-            // Render the tile at (0, 0), then apply per-window scale + position.
+        // Helper closure to render a single expose window at a given position/scale.
+        let render_window = |tile: &super::tile::Tile<W>,
+                             win_pos: Point<f64, Logical>,
+                             win_scale: f64,
+                             focus_ring: bool,
+                             renderer: &mut R,
+                             push: &mut dyn FnMut(MonitorRenderElement<R>)| {
             tile.render(
                 renderer,
                 Point::from((0., 0.)),
-                true, // focus_ring
+                focus_ring,
                 target,
                 &mut |elem| {
                     let elem = WorkspaceRenderElement::from(
@@ -2024,17 +2082,84 @@ impl<W: LayoutElement> Monitor<W> {
                     let Some(elem) = elem else { return };
                     let elem = MonitorInnerRenderElement::from(elem);
                     let elem = RescaleRenderElement::from_element(
-                        elem,
-                        Point::from((0, 0)),
-                        target_scale,
+                        elem, Point::from((0, 0)), win_scale,
                     );
                     let elem = RelocateRenderElement::from_element(
                         elem,
-                        target_pos.to_physical_precise_round(scale),
+                        win_pos.to_physical_precise_round(scale),
                         Relocate::Relative,
                     );
                     push(elem);
                 },
+            );
+        };
+
+        // Render the previewed window first (on top in Smithay's front-to-back order),
+        // animating between grid and enlarged position.
+        if let (Some(ref pid), Some(pp), Some((grid_pos, grid_scale, preview_pos, preview_scale))) =
+            (&preview_id, preview_progress, preview_target)
+        {
+            let tile = ws
+                .tiles_with_render_positions()
+                .find(|(t, _, _)| t.window().id() == pid)
+                .map(|(t, _, _)| t);
+            if let Some(tile) = tile {
+                // Lerp between grid position/scale and preview position/scale.
+                let anim_pos = super::expose::lerp_point(grid_pos, preview_pos, pp);
+                let anim_scale = super::expose::lerp(grid_scale, preview_scale, pp);
+
+                render_window(tile, anim_pos, anim_scale, false, renderer, push);
+
+                // Border around the previewed window.
+                let bw = EXPOSE_SELECTION_BORDER_WIDTH;
+                let sw = tile.tile_size().w * anim_scale;
+                let sh = tile.tile_size().h * anim_scale;
+                let border_size = Size::from((sw + 2.0 * bw, sh + 2.0 * bw));
+                let border_pos = Point::from((anim_pos.x - bw, anim_pos.y - bw));
+                let corner_radius = CornerRadius::from(EXPOSE_SELECTION_CORNER_RADIUS);
+
+                let elem = BorderRenderElement::new(
+                    border_size,
+                    Rectangle::new(Point::from((0., 0.)), border_size),
+                    niri_config::GradientInterpolation::default(),
+                    niri_config::Color::new_unpremul(0.30, 0.55, 1.0, 1.0),
+                    niri_config::Color::new_unpremul(0.45, 0.75, 1.0, 1.0),
+                    135.,
+                    Rectangle::new(Point::from((0., 0.)), border_size),
+                    bw as f32, corner_radius, scale as f32, 1.0,
+                );
+                let elem = MonitorInnerRenderElement::Border(elem);
+                let elem = RescaleRenderElement::from_element(
+                    elem, Point::from((0, 0)), 1.0,
+                );
+                let elem = RelocateRenderElement::from_element(
+                    elem, border_pos.to_physical_precise_round(scale), Relocate::Relative,
+                );
+                push(elem);
+            }
+        }
+
+        for (i, exposed) in expose_layout.windows.iter().enumerate() {
+            let is_this_preview = is_previewing && preview_id.as_ref() == Some(&exposed.id);
+
+            // Skip the previewed window — it was already rendered above (on top).
+            if is_this_preview {
+                continue;
+            }
+
+            let target_pos = super::expose::lerp_point(
+                exposed.original_pos,
+                exposed.target_pos,
+                progress,
+            );
+            let target_scale = super::expose::lerp(1.0, exposed.target_scale, progress);
+
+            render_window(
+                ws.tiles_with_render_positions()
+                    .find(|(t, _, _)| *t.window().id() == exposed.id)
+                    .map(|(t, _, _)| t)
+                    .unwrap(),
+                target_pos, target_scale, true, renderer, push,
             );
 
             // Render the label below the window thumbnail.
@@ -2043,7 +2168,6 @@ impl<W: LayoutElement> Monitor<W> {
                 let scaled_w = exposed.tile_size.w * target_scale;
                 let scaled_h = exposed.tile_size.h * target_scale;
 
-                // Center the label horizontally below the thumbnail.
                 let label_x = target_pos.x + (scaled_w - label.logical_size.w) / 2.0;
                 let label_y = target_pos.y + scaled_h + EXPOSE_LABEL_GAP;
                 let label_loc = Point::from((label_x, label_y));
@@ -2051,28 +2175,21 @@ impl<W: LayoutElement> Monitor<W> {
                 let elem = TextureRenderElement::from_texture_buffer(
                     label.buffer.clone(),
                     label_loc.to_physical_precise_round(scale).to_logical(scale),
-                    1.,
-                    None,
-                    None,
-                    Kind::Unspecified,
+                    1., None, None, Kind::Unspecified,
                 );
                 let elem = PrimaryGpuTextureRenderElement(elem);
                 let elem = MonitorInnerRenderElement::Texture(elem);
                 let elem = RescaleRenderElement::from_element(
-                    elem,
-                    Point::from((0, 0)),
-                    1.0, // Labels are already at the correct size.
+                    elem, Point::from((0, 0)), 1.0,
                 );
                 let elem = RelocateRenderElement::from_element(
-                    elem,
-                    Point::from((0, 0)),
-                    Relocate::Relative,
+                    elem, Point::from((0, 0)), Relocate::Relative,
                 );
                 push(elem);
             }
 
-            // Render the selection border around the selected window.
-            if i == expose_layout.selected_idx {
+            // Render the selection border around the selected window (only when not previewing).
+            if i == expose_layout.selected_idx && !is_previewing {
                 let bw = EXPOSE_SELECTION_BORDER_WIDTH;
                 let scaled_w = exposed.tile_size.w * target_scale;
                 let scaled_h = exposed.tile_size.h * target_scale;
@@ -2084,25 +2201,18 @@ impl<W: LayoutElement> Monitor<W> {
                     border_size,
                     Rectangle::new(Point::from((0., 0.)), border_size),
                     niri_config::GradientInterpolation::default(),
-                    niri_config::Color::new_unpremul(0.30, 0.55, 1.0, 1.0), // bright blue
-                    niri_config::Color::new_unpremul(0.45, 0.75, 1.0, 1.0), // lighter blue
-                    135., // diagonal gradient angle
+                    niri_config::Color::new_unpremul(0.30, 0.55, 1.0, 1.0),
+                    niri_config::Color::new_unpremul(0.45, 0.75, 1.0, 1.0),
+                    135.,
                     Rectangle::new(Point::from((0., 0.)), border_size),
-                    bw as f32,
-                    corner_radius,
-                    scale as f32,
-                    1.0,
+                    bw as f32, corner_radius, scale as f32, 1.0,
                 );
                 let elem = MonitorInnerRenderElement::Border(elem);
                 let elem = RescaleRenderElement::from_element(
-                    elem,
-                    Point::from((0, 0)),
-                    1.0,
+                    elem, Point::from((0, 0)), 1.0,
                 );
                 let elem = RelocateRenderElement::from_element(
-                    elem,
-                    border_pos.to_physical_precise_round(scale),
-                    Relocate::Relative,
+                    elem, border_pos.to_physical_precise_round(scale), Relocate::Relative,
                 );
                 push(elem);
             }
