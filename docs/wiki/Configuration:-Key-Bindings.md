@@ -382,6 +382,20 @@ binds {
 }
 ```
 
+<sup>Since: next release</sup> You can make the interactive screenshot UI save immediately after finishing the selection drag with the `one-shot=true` property:
+
+```kdl
+binds {
+    Print { screenshot one-shot=true; }
+}
+```
+
+The same option is available through IPC and `niri msg action`:
+
+```sh
+niri msg action screenshot --one-shot
+```
+
 <sup>Since: next release</sup> You can show the mouse pointer on window screenshots with the `show-pointer=true` property.
 The pointer will be included only if the window is currently receiving pointer input (usually this means the pointer is on top of the window).
 

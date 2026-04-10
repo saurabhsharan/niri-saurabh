@@ -226,6 +226,10 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(short = 'p', long, action = clap::ArgAction::Set, default_value_t = true))]
         show_pointer: bool,
 
+        /// Save the screenshot immediately when the selection drag finishes.
+        #[cfg_attr(feature = "clap", arg(short = 'o', long, action = clap::ArgAction::SetTrue))]
+        one_shot: bool,
+
         /// Path to save the screenshot to.
         ///
         /// The path must be absolute, otherwise an error is returned.

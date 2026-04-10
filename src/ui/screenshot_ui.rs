@@ -43,6 +43,10 @@ const TEXT_HIDE_P: &str =
 const TEXT_SHOW_P: &str =
     "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
+const TEXT_ONE_SHOT_HIDE_P: &str = "Release the pointer to save the screenshot.\n\
+     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to hide the pointer.";
+const TEXT_ONE_SHOT_SHOW_P: &str = "Release the pointer to save the screenshot.\n\
+     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
 
 // Ideally the screenshot UI should support cross-output selections. However, that poses some
 // technical challenges when the outputs have different scales and such. So, this implementation
@@ -62,6 +66,7 @@ pub enum ScreenshotUi {
         button: Button,
         alt_down: bool,
         shift_down: bool,
+        one_shot: bool,
         show_pointer: bool,
         open_anim: Animation,
         clock: Clock,
@@ -242,6 +247,7 @@ impl ScreenshotUi {
         screenshots: HashMap<Output, [OutputScreenshot; 3]>,
         default_output: Output,
         show_pointer: bool,
+        one_shot: bool,
         path: Option<String>,
     ) -> bool {
         if screenshots.is_empty() {
@@ -307,8 +313,13 @@ impl ScreenshotUi {
                         .map_err(|err| warn!("error rendering help panel: {err:?}"))
                         .ok()
                 };
-                let panel_show = render_panel_(TEXT_SHOW_P);
-                let panel_hide = render_panel_(TEXT_HIDE_P);
+                let (text_show, text_hide) = if one_shot {
+                    (TEXT_ONE_SHOT_SHOW_P, TEXT_ONE_SHOT_HIDE_P)
+                } else {
+                    (TEXT_SHOW_P, TEXT_HIDE_P)
+                };
+                let panel_show = render_panel_(text_show);
+                let panel_hide = render_panel_(text_hide);
                 let panel = Option::zip(panel_show, panel_hide);
 
                 let data = OutputData {
@@ -335,6 +346,7 @@ impl ScreenshotUi {
             button: Button::Up,
             alt_down: false,
             shift_down: false,
+            one_shot,
             show_pointer,
             open_anim,
             clock: clock.clone(),
@@ -1126,6 +1138,7 @@ impl ScreenshotUi {
             selection,
             output_data,
             shift_down,
+            one_shot,
             button,
             show_pointer,
             ..
@@ -1200,9 +1213,10 @@ impl ScreenshotUi {
             *b = rect.loc + rect.size - Size::from((1, 1));
         }
 
+        let one_shot = *one_shot;
         self.update_buffers();
 
-        Some(false)
+        Some(one_shot)
     }
 }
 
