@@ -393,6 +393,20 @@ binds {
 }
 ```
 
+<sup>Since: next release</sup> You can make the interactive screenshot UI save immediately after finishing the selection drag with the `one-shot=true` property:
+
+```kdl
+binds {
+    Print { screenshot one-shot=true; }
+}
+```
+
+The same option is available through IPC and `niri msg action`:
+
+```sh
+niri msg action screenshot --one-shot
+```
+
 #### `toggle-keyboard-shortcuts-inhibit`
 
 <sup>Since: 25.02</sup>
