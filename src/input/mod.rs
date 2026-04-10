@@ -989,8 +989,8 @@ impl State {
                 self.niri.screenshot_ui.toggle_pointer();
                 self.niri.queue_redraw_all();
             }
-            Action::Screenshot(show_cursor, path) => {
-                self.open_screenshot_ui(show_cursor, path);
+            Action::Screenshot(show_cursor, one_shot, path) => {
+                self.open_screenshot_ui(show_cursor, one_shot, path);
                 self.niri.cancel_mru();
             }
             Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
