@@ -43,10 +43,6 @@ const TEXT_HIDE_P: &str =
 const TEXT_SHOW_P: &str =
     "Press <span face='mono' bgcolor='#2C2C2C'> Space </span> to save the screenshot.\n\
      Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
-const TEXT_ONE_SHOT_HIDE_P: &str = "Release the pointer to save the screenshot.\n\
-     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to hide the pointer.";
-const TEXT_ONE_SHOT_SHOW_P: &str = "Release the pointer to save the screenshot.\n\
-     Press <span face='mono' bgcolor='#2C2C2C'> P </span> to show the pointer.";
 
 // Ideally the screenshot UI should support cross-output selections. However, that poses some
 // technical challenges when the outputs have different scales and such. So, this implementation
@@ -62,6 +58,9 @@ pub enum ScreenshotUi {
     },
     Open {
         selection: (Output, Point<i32, Physical>, Point<i32, Physical>),
+        // One-shot mode opens without the remembered/default selection, but still keeps a hidden
+        // point selection ready so the first drag can activate it without special casing geometry.
+        selection_active: bool,
         output_data: HashMap<Output, OutputData>,
         button: Button,
         alt_down: bool,
@@ -308,19 +307,20 @@ impl ScreenshotUi {
                 ];
                 let locations = [Default::default(); 8];
 
-                let mut render_panel_ = |text| {
-                    render_panel(renderer, scale, text)
-                        .map_err(|err| warn!("error rendering help panel: {err:?}"))
-                        .ok()
-                };
-                let (text_show, text_hide) = if one_shot {
-                    (TEXT_ONE_SHOT_SHOW_P, TEXT_ONE_SHOT_HIDE_P)
+                let panel = if one_shot {
+                    // One-shot screenshots complete on pointer release, so the normal bottom
+                    // controls would be both distracting and misleading.
+                    None
                 } else {
-                    (TEXT_SHOW_P, TEXT_HIDE_P)
+                    let mut render_panel_ = |text| {
+                        render_panel(renderer, scale, text)
+                            .map_err(|err| warn!("error rendering help panel: {err:?}"))
+                            .ok()
+                    };
+                    let panel_show = render_panel_(TEXT_SHOW_P);
+                    let panel_hide = render_panel_(TEXT_HIDE_P);
+                    Option::zip(panel_show, panel_hide)
                 };
-                let panel_show = render_panel_(text_show);
-                let panel_hide = render_panel_(text_hide);
-                let panel = Option::zip(panel_show, panel_hide);
 
                 let data = OutputData {
                     size,
@@ -342,6 +342,7 @@ impl ScreenshotUi {
 
         *self = Self::Open {
             selection,
+            selection_active: !one_shot,
             output_data,
             button: Button::Up,
             alt_down: false,
@@ -722,6 +723,7 @@ impl ScreenshotUi {
     fn update_buffers(&mut self) {
         let Self::Open {
             selection,
+            selection_active,
             output_data,
             ..
         } = self
@@ -738,7 +740,7 @@ impl ScreenshotUi {
             let size = data.size;
             let scale = data.scale;
 
-            if output == selection_output {
+            if output == selection_output && *selection_active {
                 // Check if the selection is still valid. If not, reset it back to default.
                 if !Rectangle::from_size(size).contains_rect(rect) {
                     rect = Rectangle::new(
@@ -875,6 +877,7 @@ impl ScreenshotUi {
 
         let Self::Open {
             selection,
+            selection_active,
             output_data,
             show_pointer,
             ..
@@ -882,6 +885,8 @@ impl ScreenshotUi {
         else {
             panic!("screenshot UI must be open to capture");
         };
+
+        anyhow::ensure!(*selection_active, "no screenshot selection");
 
         let data = &output_data[&selection.0];
         let rect = rect_from_corner_points(selection.1, selection.2);
@@ -938,7 +943,12 @@ impl ScreenshotUi {
     }
 
     pub fn action(&self, raw: Keysym, mods: ModifiersState) -> Option<Action> {
-        let Self::Open { button, .. } = self else {
+        let Self::Open {
+            selection_active,
+            button,
+            ..
+        } = self
+        else {
             return None;
         };
 
@@ -947,7 +957,12 @@ impl ScreenshotUi {
             return None;
         }
 
-        action(raw, mods)
+        let action = action(raw, mods);
+        if !*selection_active && matches!(action, Some(Action::ConfirmScreenshot { .. })) {
+            return None;
+        }
+
+        action
     }
 
     pub fn selection_output(&self) -> Option<&Output> {
@@ -1061,6 +1076,7 @@ impl ScreenshotUi {
     ) -> bool {
         let Self::Open {
             selection,
+            selection_active,
             output_data,
             alt_down,
             shift_down,
@@ -1127,6 +1143,7 @@ impl ScreenshotUi {
             move_state: None,
         };
         *selection = (output, point, point);
+        *selection_active = true;
 
         self.update_buffers();
 
