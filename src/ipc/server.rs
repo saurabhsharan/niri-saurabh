@@ -5,7 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::{env, io, process};
+use std::{env, io, process, time::Duration};
 
 use anyhow::Context;
 use async_channel::{Receiver, Sender, TrySendError};
@@ -25,9 +25,10 @@ use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData,
 };
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::fs::unlink;
-use smithay::utils::SERIAL_COUNTER;
+use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
 use crate::backend::IpcOutputMap;
@@ -387,6 +388,48 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::Action(action) => {
             validate_action(&action)?;
 
+            if let Action::SimulateClick { x, y } = &action {
+                let (x, y) = (*x, *y);
+                let (tx, rx) = async_channel::bounded(1);
+
+                ctx.event_loop.insert_idle(move |state| {
+                    // Make sure some logic like workspace clean-up has a chance to run before
+                    // doing actions.
+                    state.niri.advance_animations();
+
+                    if state.niri.is_locked() {
+                        let _ = tx.send_blocking(Err(String::from(
+                            "simulate-click is not allowed while locked",
+                        )));
+                        return;
+                    }
+
+                    let location: Point<f64, Logical> = Point::from((x, y));
+                    if let Err(err) = state.simulate_click_press(location) {
+                        let _ = tx.send_blocking(Err(err));
+                        return;
+                    }
+
+                    let tx = tx.clone();
+                    let timer = Timer::from_duration(Duration::from_millis(5));
+                    state
+                        .niri
+                        .event_loop
+                        .insert_source(timer, move |_, _, state| {
+                            state.simulate_click_release();
+                            let _ = tx.send_blocking(Ok(()));
+                            TimeoutAction::Drop
+                        })
+                        .unwrap();
+                });
+
+                return match rx.recv().await {
+                    Ok(Ok(())) => Ok(Response::Handled),
+                    Ok(Err(err)) => Err(err),
+                    Err(_) => Err(String::from("error simulating click")),
+                };
+            }
+
             let (tx, rx) = async_channel::bounded(1);
 
             let action = niri_config::Action::from(action);
@@ -485,6 +528,12 @@ fn validate_action(action: &Action) -> Result<(), String> {
         let p = Path::new(path);
         if !p.is_file() {
             return Err(format!("path does not point to a file: {path}"));
+        }
+    }
+
+    if let Action::SimulateClick { x, y } = action {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(format!("coordinates must be finite, got ({x}, {y})"));
         }
     }
 

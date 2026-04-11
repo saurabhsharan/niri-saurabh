@@ -932,6 +932,25 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
+    /// Simulate a left mouse click at logical screen coordinates.
+    ///
+    /// The coordinates are global logical screen coordinates, in the same coordinate space as
+    /// `focused-window`'s `layout.global_screen_geometry` and output logical sizes. On a 2880x1920
+    /// physical output at scale 2, the output is 1440x960 logical pixels.
+    ///
+    /// This action warps the visible pointer to the requested point, sends pointer motion to the
+    /// surface under that point, then sends a left-button press and release. The pointer remains at
+    /// the requested point afterwards. The compositor may also activate the clicked window or focus
+    /// an on-demand layer-shell surface, like a real click would.
+    SimulateClick {
+        /// X position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+
+        /// Y position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+    },
     /// Reload the config file.
     ///
     /// Can be useful for scripts changing the config file, to avoid waiting the small duration for
