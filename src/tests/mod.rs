@@ -9,5 +9,6 @@ mod floating;
 mod fullscreen;
 mod layer_shell;
 mod remove_output;
+mod simulate_click;
 mod transactions;
 mod window_opening;

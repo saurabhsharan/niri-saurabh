@@ -77,6 +77,32 @@ This geometry describes the window visual geometry itself, not the tile: it excl
 `layout.global_screen_geometry` is not part of the regular window list or event-stream window layout updates.
 Use `niri msg --json focused-window` or the `FocusedWindow` IPC request when you need this field.
 
+#### Simulated Clicks
+
+This fork adds an IPC action for scripts that need to click at a known screen position:
+
+```sh
+niri msg action simulate-click --x 720 --y 480
+```
+
+The `--x` and `--y` values are global logical screen coordinates.
+They use the same coordinate space as `focused-window`'s `layout.global_screen_geometry` and output logical sizes.
+For example, on a 2880x1920 physical output at scale 2, the logical output size is 1440x960, so its coordinates range from `(0, 0)` to `(1440, 960)`.
+
+The action has visible and focus-related side effects.
+It warps the pointer to the requested point and leaves it there, sends normal pointer motion to the surface under that point, then sends a left-button press and release with a small delay between them.
+Because the pointer motion is sent first, clients receive the expected pointer enter/motion before the button event.
+The click may also activate the window under the pointer or focus an on-demand layer-shell surface, like a real click would.
+
+The action returns an error if the coordinates are not finite, if the point is outside all outputs, if there is no Wayland surface under the point, or if the session is locked.
+It does not click the desktop background, and it does not click niri's own decoration-only regions when there is no client surface at the target.
+
+For raw JSON IPC, the request is:
+
+```json
+{"Action":{"SimulateClick":{"x":720.0,"y":480.0}}}
+```
+
 For more complex requests, you can use `socat` to find how `niri msg` formats them:
 
 ```sh
