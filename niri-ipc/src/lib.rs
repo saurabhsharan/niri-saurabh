@@ -1390,6 +1390,30 @@ pub struct WindowLayout {
     /// the distance from the corner of the black backdrop to the corner of the (centered) window
     /// contents.
     pub window_offset_in_tile: (f64, f64),
+    /// Global screen geometry of the window's visual geometry, if requested.
+    ///
+    /// Currently this is set only on [`Response::FocusedWindow`], i.e. `niri msg focused-window`
+    /// and `niri msg --json focused-window`.
+    ///
+    /// The `x` and `y` coordinates are in the compositor's global logical coordinate space. They
+    /// refer to the top-left corner of the window's visual geometry, excluding niri decorations
+    /// like borders. The `width` and `height` are the same dimensions as [`Self::window_size`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_screen_geometry: Option<WindowGeometry>,
+}
+
+/// Position and size of a window's visual geometry in global screen coordinates.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct WindowGeometry {
+    /// Logical X position of the top-left corner.
+    pub x: f64,
+    /// Logical Y position of the top-left corner.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: i32,
+    /// Height in logical pixels.
+    pub height: i32,
 }
 
 /// Output configuration change result.
