@@ -335,9 +335,15 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             Response::KeyboardLayouts(layout)
         }
         Request::FocusedWindow => {
-            let state = ctx.event_stream_state.borrow();
-            let windows = &state.windows.windows;
-            let window = windows.values().find(|win| win.is_focused).cloned();
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let window = make_focused_ipc_window(state);
+                let _ = tx.send_blocking(window);
+            });
+            let window = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting focused window info"))?;
             Response::FocusedWindow(window)
         }
         Request::PickWindow => {
@@ -529,6 +535,40 @@ fn make_ipc_window(
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
     })
+}
+
+/// Builds the focused-window IPC response from live compositor state.
+///
+/// The regular window list is cached for event-stream clients, but global screen geometry is a
+/// rendered-position query: it depends on the focused window's current tile position inside its
+/// workspace, the output's position in global compositor space, and the window's offset inside its
+/// tile. Computing it here keeps that coordinate math in the compositor, where all three pieces of
+/// state are available, and lets the CLI only format the result.
+fn make_focused_ipc_window(state: &State) -> Option<niri_ipc::Window> {
+    let (mapped, output, workspace_id, mut layout) = state
+        .niri
+        .layout
+        .find_window_with_ipc_layout(|mapped| mapped.is_focused())?;
+
+    if let (Some(output), Some((tile_x, tile_y))) = (output, layout.tile_pos_in_workspace_view) {
+        if let Some(output_geometry) = state.niri.global_space.output_geometry(output) {
+            let (window_offset_x, window_offset_y) = layout.window_offset_in_tile;
+            let (width, height) = layout.window_size;
+
+            // Convert from workspace-local tile coordinates to global screen coordinates for the
+            // window's visual geometry. The tile position locates the tile on its output, the
+            // window offset accounts for decorations/centering inside that tile, and the output
+            // geometry anchors the result in the compositor's global coordinate space.
+            layout.global_screen_geometry = Some(niri_ipc::WindowGeometry {
+                x: f64::from(output_geometry.loc.x) + tile_x + window_offset_x,
+                y: f64::from(output_geometry.loc.y) + tile_y + window_offset_y,
+                width,
+                height,
+            });
+        }
+    }
+
+    Some(make_ipc_window(mapped, workspace_id, layout))
 }
 
 impl State {

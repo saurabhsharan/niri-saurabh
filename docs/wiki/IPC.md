@@ -47,6 +47,36 @@ $ socat STDIO "$NIRI_SOCKET"
 
 The reply is an `Ok` or an `Err` wrapping the same JSON object as you get from `niri msg --json`.
 
+#### Focused Window Geometry
+
+`niri msg focused-window` includes the focused window's global screen geometry in the human-readable `Layout` section:
+
+```text
+    Global screen geometry: 1920, 47 1280 x 720
+```
+
+In JSON, the same data appears only on the focused-window response at `layout.global_screen_geometry`:
+
+```json
+{
+  "layout": {
+    "global_screen_geometry": {
+      "x": 1920.0,
+      "y": 47.0,
+      "width": 1280,
+      "height": 720
+    }
+  }
+}
+```
+
+The `x` and `y` values are the top-left corner of the window's visual geometry in niri's global logical screen coordinate space.
+The `width` and `height` values are logical pixels and match the window's `layout.window_size`.
+This geometry describes the window visual geometry itself, not the tile: it excludes niri decorations such as borders and includes the window's offset within its tile.
+
+`layout.global_screen_geometry` is not part of the regular window list or event-stream window layout updates.
+Use `niri msg --json focused-window` or the `FocusedWindow` IPC request when you need this field.
+
 For more complex requests, you can use `socat` to find how `niri msg` formats them:
 
 ```sh
