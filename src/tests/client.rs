@@ -29,9 +29,11 @@ use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
-use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle, WEnum};
 
 use crate::utils::id::IdCounter;
 
@@ -55,9 +57,54 @@ pub struct State {
     pub layer_shell: Option<ZwlrLayerShellV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
+    // The simulate-click tests need a real wl_pointer client object, because the behavior under
+    // test is not just niri's internal pointer location. The contract we care about is the
+    // Wayland-visible event stream: enter/motion must reach the client before button press.
+    pub seat: Option<WlSeat>,
+    pub pointer: Option<WlPointer>,
+    // Keep this intentionally raw and chronological. Tests assert ordering across event kinds,
+    // which is the easiest way to catch regressions where a future niri or Smithay change sends
+    // the click to the old pointer focus or emits button before motion.
+    pub pointer_events: Vec<PointerEvent>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PointerEvent {
+    // wl_pointer.enter carries the target surface and coordinates local to that surface. This is
+    // the key event many clients require before accepting a button event.
+    Enter {
+        surface: WlSurface,
+        x: f64,
+        y: f64,
+    },
+    // Recorded so tests can notice if a future change accidentally leaves the target surface.
+    Leave {
+        surface: WlSurface,
+    },
+    // wl_pointer.motion also uses surface-local coordinates. simulate-click relies on this event
+    // to update client-side hover/hit-test state before sending the synthetic button press.
+    Motion {
+        x: f64,
+        y: f64,
+    },
+    // Only button code and state matter for these tests; serial/time are intentionally omitted so
+    // assertions stay focused on semantic ordering.
+    Button {
+        button: u32,
+        state: PointerButtonState,
+    },
+    // Frame events are useful context when a test failure prints the event sequence.
+    Frame,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerButtonState {
+    Pressed,
+    Released,
+    Unknown(u32),
 }
 
 pub struct Window {
@@ -181,6 +228,9 @@ impl Client {
             layer_shell: None,
             spbm: None,
             viewporter: None,
+            seat: None,
+            pointer: None,
+            pointer_events: Vec::new(),
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -518,6 +568,11 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == WpViewporter::interface().name {
                     let version = min(version, WpViewporter::interface().version);
                     state.viewporter = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WlSeat::interface().name {
+                    let version = min(version, WlSeat::interface().version);
+                    // Bind the seat in the minimal test client so we can request wl_pointer once
+                    // the compositor advertises pointer capability.
+                    state.seat = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -557,6 +612,90 @@ impl Dispatch<WlOutput, ()> for State {
             wl_output::Event::Description { .. } => (),
             _ => unreachable!(),
         }
+    }
+}
+
+impl Dispatch<WlSeat, ()> for State {
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: <WlSeat as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_seat::Event::Capabilities {
+                capabilities: WEnum::Value(capabilities),
+            } => {
+                // Smithay advertises pointer capability asynchronously. Only create one pointer:
+                // multiple wl_pointer objects would duplicate every pointer event and make
+                // ordering assertions noisy.
+                if capabilities.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
+                    state.pointer = Some(seat.get_pointer(qh, ()));
+                }
+            }
+            wl_seat::Event::Capabilities {
+                capabilities: WEnum::Unknown(_),
+            } => (),
+            wl_seat::Event::Name { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _pointer: &WlPointer,
+        event: <WlPointer as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // Record only the event fields that are relevant to simulate-click's contract. This keeps
+        // tests resilient to unrelated serial/timestamp changes while still checking that motion
+        // establishes pointer focus and target-local coordinates before button dispatch.
+        let event = match event {
+            wl_pointer::Event::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => PointerEvent::Enter {
+                surface,
+                x: surface_x,
+                y: surface_y,
+            },
+            wl_pointer::Event::Leave { surface, .. } => PointerEvent::Leave { surface },
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => PointerEvent::Motion {
+                x: surface_x,
+                y: surface_y,
+            },
+            wl_pointer::Event::Button { button, state, .. } => {
+                let state = match state {
+                    WEnum::Value(wl_pointer::ButtonState::Pressed) => PointerButtonState::Pressed,
+                    WEnum::Value(wl_pointer::ButtonState::Released) => PointerButtonState::Released,
+                    WEnum::Unknown(value) => PointerButtonState::Unknown(value),
+                    _ => unreachable!(),
+                };
+                PointerEvent::Button { button, state }
+            }
+            wl_pointer::Event::Frame => PointerEvent::Frame,
+            wl_pointer::Event::Axis { .. }
+            | wl_pointer::Event::AxisSource { .. }
+            | wl_pointer::Event::AxisStop { .. }
+            | wl_pointer::Event::AxisDiscrete { .. }
+            | wl_pointer::Event::AxisValue120 { .. }
+            | wl_pointer::Event::AxisRelativeDirection { .. } => return,
+            _ => unreachable!(),
+        };
+
+        state.pointer_events.push(event);
     }
 }
 

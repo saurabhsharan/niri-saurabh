@@ -709,6 +709,7 @@ fn print_window(window: &Window) {
         window_size,
         tile_pos_in_workspace_view,
         window_offset_in_tile,
+        global_screen_geometry,
     } = window.layout;
 
     println!("  Layout:");
@@ -736,6 +737,16 @@ fn print_window(window: &Window) {
         fmt_rounded(window_offset_in_tile.0),
         fmt_rounded(window_offset_in_tile.1)
     );
+
+    if let Some(geometry) = global_screen_geometry {
+        println!(
+            "    Global screen geometry: {}, {} {} x {}",
+            fmt_rounded(geometry.x),
+            fmt_rounded(geometry.y),
+            geometry.width,
+            geometry.height,
+        );
+    }
 }
 
 fn print_cast(cast: &Cast) {

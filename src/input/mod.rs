@@ -2596,6 +2596,22 @@ impl State {
                 }
                 self.niri.queue_redraw_all();
             }
+            Action::SimulateClick { x, y } => {
+                let location = Point::from((x, y));
+                if let Err(err) = self.simulate_click_press(location) {
+                    warn!("error simulating click: {err}");
+                    return;
+                }
+
+                let timer = Timer::from_duration(Duration::from_millis(5));
+                self.niri
+                    .event_loop
+                    .insert_source(timer, |_, _, state| {
+                        state.simulate_click_release();
+                        TimeoutAction::Drop
+                    })
+                    .unwrap();
+            }
             Action::LoadConfigFile(path) => {
                 if let Some(watcher) = &self.niri.config_file_watcher {
                     watcher.load_config(path);

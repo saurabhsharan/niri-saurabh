@@ -661,6 +661,30 @@ impl OverviewProgress {
     }
 }
 
+/// Finds a window in one workspace and returns an IPC layout with a live workspace-view position.
+///
+/// The normal IPC layout data for tiled windows does not always carry a
+/// `tile_pos_in_workspace_view`, because most callers do not need an absolute rendered position.
+/// The focused-window IPC path does need it: the compositor later combines this tile position with
+/// the window's offset inside the tile and the output's global position to produce global screen
+/// coordinates.
+fn find_window_in_workspace<'a, W: LayoutElement>(
+    ws: &'a Workspace<W>,
+    f: &mut impl FnMut(&W) -> bool,
+) -> Option<(&'a W, WindowLayout)> {
+    let (tile, pos, _) = ws
+        .tiles_with_render_positions()
+        .find(|(tile, _, _)| f(tile.window()))?;
+    let mut layout = ws
+        .tiles_with_ipc_layouts()
+        .find_map(|(candidate, layout)| {
+            (candidate.window().id() == tile.window().id()).then_some(layout)
+        })?;
+
+    layout.tile_pos_in_workspace_view = Some(pos.into());
+    Some((tile.window(), layout))
+}
+
 impl<W: LayoutElement> Layout<W> {
     pub fn new(clock: Clock, config: &Config) -> Self {
         Self::with_options_and_workspaces(clock, config, Options::from_config(config))
@@ -1671,6 +1695,48 @@ impl<W: LayoutElement> Layout<W> {
                 }
             }
         }
+    }
+
+    /// Finds one window and returns the same IPC layout data as `with_windows()`, enriched with
+    /// the current workspace-view tile position.
+    ///
+    /// This is used by `niri msg focused-window` instead of the cached event-stream state because
+    /// global coordinates require live layout information. In particular, the compositor must know
+    /// where the focused tile is currently rendered before it can add the output's global location
+    /// and the window's offset within the tile.
+    pub fn find_window_with_ipc_layout(
+        &self,
+        mut f: impl FnMut(&W) -> bool,
+    ) -> Option<(&W, Option<&Output>, Option<WorkspaceId>, WindowLayout)> {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
+            if f(move_.tile.window()) {
+                let mut layout = move_.tile.ipc_layout_template();
+                let tile_pos = move_.tile_render_location(self.overview_zoom());
+                layout.tile_pos_in_workspace_view = Some(tile_pos.into());
+                return Some((move_.tile.window(), Some(&move_.output), None, layout));
+            }
+        }
+
+        match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                for mon in monitors {
+                    for ws in &mon.workspaces {
+                        if let Some((window, layout)) = find_window_in_workspace(ws, &mut f) {
+                            return Some((window, Some(&mon.output), Some(ws.id()), layout));
+                        }
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                for ws in workspaces {
+                    if let Some((window, layout)) = find_window_in_workspace(ws, &mut f) {
+                        return Some((window, None, Some(ws.id()), layout));
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     pub fn with_windows_mut(&mut self, mut f: impl FnMut(&mut W, Option<&Output>)) {

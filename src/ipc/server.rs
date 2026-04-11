@@ -5,7 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::{env, io, process};
+use std::{env, io, process, time::Duration};
 
 use anyhow::Context;
 use async_channel::{Receiver, Sender, TrySendError};
@@ -25,9 +25,10 @@ use smithay::input::pointer::{
     CursorIcon, CursorImageStatus, Focus, GrabStartData as PointerGrabStartData,
 };
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::fs::unlink;
-use smithay::utils::SERIAL_COUNTER;
+use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
 use crate::backend::IpcOutputMap;
@@ -335,9 +336,15 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             Response::KeyboardLayouts(layout)
         }
         Request::FocusedWindow => {
-            let state = ctx.event_stream_state.borrow();
-            let windows = &state.windows.windows;
-            let window = windows.values().find(|win| win.is_focused).cloned();
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let window = make_focused_ipc_window(state);
+                let _ = tx.send_blocking(window);
+            });
+            let window = rx
+                .recv()
+                .await
+                .map_err(|_| String::from("error getting focused window info"))?;
             Response::FocusedWindow(window)
         }
         Request::PickWindow => {
@@ -380,6 +387,48 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         }
         Request::Action(action) => {
             validate_action(&action)?;
+
+            if let Action::SimulateClick { x, y } = &action {
+                let (x, y) = (*x, *y);
+                let (tx, rx) = async_channel::bounded(1);
+
+                ctx.event_loop.insert_idle(move |state| {
+                    // Make sure some logic like workspace clean-up has a chance to run before
+                    // doing actions.
+                    state.niri.advance_animations();
+
+                    if state.niri.is_locked() {
+                        let _ = tx.send_blocking(Err(String::from(
+                            "simulate-click is not allowed while locked",
+                        )));
+                        return;
+                    }
+
+                    let location: Point<f64, Logical> = Point::from((x, y));
+                    if let Err(err) = state.simulate_click_press(location) {
+                        let _ = tx.send_blocking(Err(err));
+                        return;
+                    }
+
+                    let tx = tx.clone();
+                    let timer = Timer::from_duration(Duration::from_millis(5));
+                    state
+                        .niri
+                        .event_loop
+                        .insert_source(timer, move |_, _, state| {
+                            state.simulate_click_release();
+                            let _ = tx.send_blocking(Ok(()));
+                            TimeoutAction::Drop
+                        })
+                        .unwrap();
+                });
+
+                return match rx.recv().await {
+                    Ok(Ok(())) => Ok(Response::Handled),
+                    Ok(Err(err)) => Err(err),
+                    Err(_) => Err(String::from("error simulating click")),
+                };
+            }
 
             let (tx, rx) = async_channel::bounded(1);
 
@@ -482,6 +531,12 @@ fn validate_action(action: &Action) -> Result<(), String> {
         }
     }
 
+    if let Action::SimulateClick { x, y } = action {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(format!("coordinates must be finite, got ({x}, {y})"));
+        }
+    }
+
     Ok(())
 }
 
@@ -529,6 +584,40 @@ fn make_ipc_window(
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
     })
+}
+
+/// Builds the focused-window IPC response from live compositor state.
+///
+/// The regular window list is cached for event-stream clients, but global screen geometry is a
+/// rendered-position query: it depends on the focused window's current tile position inside its
+/// workspace, the output's position in global compositor space, and the window's offset inside its
+/// tile. Computing it here keeps that coordinate math in the compositor, where all three pieces of
+/// state are available, and lets the CLI only format the result.
+fn make_focused_ipc_window(state: &State) -> Option<niri_ipc::Window> {
+    let (mapped, output, workspace_id, mut layout) = state
+        .niri
+        .layout
+        .find_window_with_ipc_layout(|mapped| mapped.is_focused())?;
+
+    if let (Some(output), Some((tile_x, tile_y))) = (output, layout.tile_pos_in_workspace_view) {
+        if let Some(output_geometry) = state.niri.global_space.output_geometry(output) {
+            let (window_offset_x, window_offset_y) = layout.window_offset_in_tile;
+            let (width, height) = layout.window_size;
+
+            // Convert from workspace-local tile coordinates to global screen coordinates for the
+            // window's visual geometry. The tile position locates the tile on its output, the
+            // window offset accounts for decorations/centering inside that tile, and the output
+            // geometry anchors the result in the compositor's global coordinate space.
+            layout.global_screen_geometry = Some(niri_ipc::WindowGeometry {
+                x: f64::from(output_geometry.loc.x) + tile_x + window_offset_x,
+                y: f64::from(output_geometry.loc.y) + tile_y + window_offset_y,
+                width,
+                height,
+            });
+        }
+    }
+
+    Some(make_ipc_window(mapped, workspace_id, layout))
 }
 
 impl State {

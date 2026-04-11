@@ -19,7 +19,7 @@ use niri_config::{
     WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::input::Keycode;
+use smithay::backend::input::{ButtonState, Keycode};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -46,7 +46,7 @@ use smithay::desktop::{
 };
 use smithay::input::keyboard::{Layout as KeyboardLayout, XkbConfig};
 use smithay::input::pointer::{
-    CursorIcon, CursorImageStatus, CursorImageSurfaceData, Focus,
+    ButtonEvent, CursorIcon, CursorImageStatus, CursorImageSurfaceData, Focus,
     GrabStartData as PointerGrabStartData, MotionEvent,
 };
 use smithay::input::{Seat, SeatState};
@@ -182,6 +182,7 @@ use crate::window::mapped::MappedId;
 use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped, WindowRef};
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
+const BTN_LEFT: u32 = 0x110;
 
 // We'll try to send frame callbacks at least once a second. We'll make a timer that fires once a
 // second, so with the worst timing the maximum interval between two frame callbacks for a surface
@@ -896,6 +897,92 @@ impl State {
 
         // FIXME: granular
         self.niri.queue_redraw_all();
+    }
+
+    pub fn simulate_click_press(&mut self, location: Point<f64, Logical>) -> Result<(), String> {
+        if !location.x.is_finite() || !location.y.is_finite() {
+            return Err(format!(
+                "coordinates must be finite, got ({}, {})",
+                location.x, location.y
+            ));
+        }
+
+        if self.niri.output_under(location).is_none() {
+            return Err(format!(
+                "point ({}, {}) is outside all outputs",
+                location.x, location.y
+            ));
+        }
+
+        let under = self.niri.contents_under(location);
+        if under.surface.is_none() {
+            return Err(format!(
+                "no surface under point ({}, {})",
+                location.x, location.y
+            ));
+        }
+
+        self.niri.pointer_visibility = PointerVisibility::Visible;
+        self.niri.tablet_cursor_location = None;
+        self.niri.handle_focus_follows_mouse(&under);
+        self.niri.pointer_contents.clone_from(&under);
+
+        let pointer = &self.niri.seat.get_pointer().unwrap();
+        pointer.motion(
+            self,
+            under.surface.clone(),
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
+
+        // Smithay uses the first motion to a new surface to establish pointer focus and emit
+        // wl_pointer.enter. Send a second same-position motion so clients also observe an explicit
+        // wl_pointer.motion at the target coordinates before the button press.
+        pointer.motion(
+            self,
+            under.surface.clone(),
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
+
+        self.niri.maybe_activate_pointer_constraint();
+
+        if let Some((window, _)) = &under.window {
+            if !self.niri.layout.is_overview_open() {
+                self.niri.layout.activate_window(window);
+            }
+        }
+        self.niri.focus_layer_surface_if_on_demand(under.layer);
+        self.niri.queue_redraw_all();
+
+        self.simulate_click_button(ButtonState::Pressed);
+        Ok(())
+    }
+
+    pub fn simulate_click_release(&mut self) {
+        self.simulate_click_button(ButtonState::Released);
+    }
+
+    fn simulate_click_button(&mut self, state: ButtonState) {
+        let pointer = &self.niri.seat.get_pointer().unwrap();
+        pointer.button(
+            self,
+            &ButtonEvent {
+                button: BTN_LEFT,
+                state,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
     }
 
     /// Moves cursor within the specified rectangle, only adjusting coordinates if needed.

@@ -73,7 +73,7 @@ pub enum Msg {
     KeyboardLayouts,
     /// Print information about the focused output.
     FocusedOutput,
-    /// Print information about the focused window.
+    /// Print information about the focused window, including its global screen geometry.
     FocusedWindow,
     /// Pick a window with the mouse and print information about it.
     PickWindow,

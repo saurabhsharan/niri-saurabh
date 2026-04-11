@@ -952,6 +952,25 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
+    /// Simulate a left mouse click at logical screen coordinates.
+    ///
+    /// The coordinates are global logical screen coordinates, in the same coordinate space as
+    /// `focused-window`'s `layout.global_screen_geometry` and output logical sizes. On a 2880x1920
+    /// physical output at scale 2, the output is 1440x960 logical pixels.
+    ///
+    /// This action warps the visible pointer to the requested point, sends pointer motion to the
+    /// surface under that point, then sends a left-button press and release. The pointer remains at
+    /// the requested point afterwards. The compositor may also activate the clicked window or focus
+    /// an on-demand layer-shell surface, like a real click would.
+    SimulateClick {
+        /// X position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+
+        /// Y position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+    },
     /// Reload the config file.
     ///
     /// Can be useful for scripts changing the config file, to avoid waiting the small duration for
@@ -1410,6 +1429,30 @@ pub struct WindowLayout {
     /// the distance from the corner of the black backdrop to the corner of the (centered) window
     /// contents.
     pub window_offset_in_tile: (f64, f64),
+    /// Global screen geometry of the window's visual geometry, if requested.
+    ///
+    /// Currently this is set only on [`Response::FocusedWindow`], i.e. `niri msg focused-window`
+    /// and `niri msg --json focused-window`.
+    ///
+    /// The `x` and `y` coordinates are in the compositor's global logical coordinate space. They
+    /// refer to the top-left corner of the window's visual geometry, excluding niri decorations
+    /// like borders. The `width` and `height` are the same dimensions as [`Self::window_size`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_screen_geometry: Option<WindowGeometry>,
+}
+
+/// Position and size of a window's visual geometry in global screen coordinates.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct WindowGeometry {
+    /// Logical X position of the top-left corner.
+    pub x: f64,
+    /// Logical Y position of the top-left corner.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: i32,
+    /// Height in logical pixels.
+    pub height: i32,
 }
 
 /// Output configuration change result.
