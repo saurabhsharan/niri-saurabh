@@ -334,6 +334,31 @@ pub enum Action {
     },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
+    /// Emit a one-off synthetic scroll gesture at the current cursor location.
+    ///
+    /// This is intended for programmatic IPC clients. For user-facing keybinds that scroll while a
+    /// key is held, use the bind-only keyboard-scroll-up and keyboard-scroll-down actions instead.
+    SimulateScroll {
+        /// Horizontal scroll amount in logical points.
+        ///
+        /// Positive values scroll to the right, negative values scroll to the left.
+        #[serde(default)]
+        #[cfg_attr(
+            feature = "clap",
+            arg(long, allow_hyphen_values = true, default_value_t = 0.)
+        )]
+        x: f64,
+
+        /// Vertical scroll amount in logical points.
+        ///
+        /// Positive values scroll down, negative values scroll up.
+        #[serde(default)]
+        #[cfg_attr(
+            feature = "clap",
+            arg(long, allow_hyphen_values = true, default_value_t = 0.)
+        )]
+        y: f64,
+    },
     /// Focus the column to the left.
     FocusColumnLeft {},
     /// Focus the column to the right.
