@@ -202,6 +202,10 @@ impl Default for ClickButton {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Actions that niri can perform.
 // Variants in this enum should match the spelling of the ones in niri-config. Most, but not all,
 // variants from niri-config should be present here.
@@ -974,6 +978,30 @@ pub enum Action {
         #[serde(default)]
         #[cfg_attr(feature = "clap", arg(long, value_enum, default_value = "left"))]
         button: ClickButton,
+    },
+    /// Warp the pointer to logical screen coordinates.
+    ///
+    /// The coordinates are global logical screen coordinates, in the same coordinate space as
+    /// `focused-window`'s `layout.global_screen_geometry` and output logical sizes. On a 2880x1920
+    /// physical output at scale 2, the output is 1440x960 logical pixels.
+    ///
+    /// By default this action makes the warp visible to Wayland clients by sending normal pointer
+    /// enter/motion events for the surface under the target point. Set `emit-motion` to false to
+    /// update the compositor cursor location without sending client pointer events or changing
+    /// pointer focus.
+    WarpPointer {
+        /// X position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        x: f64,
+
+        /// Y position in logical screen coordinates.
+        #[cfg_attr(feature = "clap", arg(long))]
+        y: f64,
+
+        /// Whether to send pointer enter/motion events while warping.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        emit_motion: bool,
     },
     /// Reload the config file.
     ///
@@ -2172,5 +2200,28 @@ mod tests {
         );
         assert!("-".parse::<PositionChange>().is_err());
         assert!("10% ".parse::<PositionChange>().is_err());
+    }
+
+    #[test]
+    fn warp_pointer_json_defaults_emit_motion_to_true() {
+        let action: Action = serde_json::from_str(r#"{"WarpPointer":{"x":1.0,"y":2.0}}"#).unwrap();
+        match action {
+            Action::WarpPointer { emit_motion, .. } => assert!(
+                emit_motion,
+                "missing emit_motion in raw JSON IPC should preserve the CLI default"
+            ),
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        let action: Action =
+            serde_json::from_str(r#"{"WarpPointer":{"x":1.0,"y":2.0,"emit_motion":false}}"#)
+                .unwrap();
+        match action {
+            Action::WarpPointer { emit_motion, .. } => assert!(
+                !emit_motion,
+                "raw JSON IPC must be able to request a silent pointer warp"
+            ),
+            other => panic!("unexpected action: {other:?}"),
+        }
     }
 }

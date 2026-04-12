@@ -376,6 +376,12 @@ pub enum Action {
         button: ClickButton,
     },
     #[knuffel(skip)]
+    WarpPointer {
+        x: f64,
+        y: f64,
+        emit_motion: bool,
+    },
+    #[knuffel(skip)]
     LoadConfigFile(#[knuffel(argument)] Option<String>),
     #[knuffel(skip)]
     MruAdvance {
@@ -709,6 +715,9 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::SimulateClick { x, y, button } => {
                 Self::SimulateClick { x, y, button }
+            }
+            niri_ipc::Action::WarpPointer { x, y, emit_motion } => {
+                Self::WarpPointer { x, y, emit_motion }
             }
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
         }
