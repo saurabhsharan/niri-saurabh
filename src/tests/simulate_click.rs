@@ -1,5 +1,5 @@
 use niri_config::{Action, Config};
-use niri_ipc::WindowGeometry;
+use niri_ipc::{ClickButton, WindowGeometry};
 use smithay::utils::Point;
 use wayland_client::protocol::wl_surface::WlSurface;
 
@@ -7,6 +7,8 @@ use super::client::{ClientId, PointerButtonState, PointerEvent};
 use super::*;
 
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
 
 // Build the smallest scene that can receive pointer events: one headless output and one mapped
 // xdg-toplevel with a committed 100x100 buffer. Keeping this local avoids coupling these
@@ -55,23 +57,23 @@ fn focused_window_global_geometry(f: &mut Fixture) -> WindowGeometry {
 
 // Return the press/release positions in the client's chronological pointer event log. Keeping this
 // as a helper makes each test name and comment focus on the implementation assumption it protects.
-fn button_event_indices(events: &[PointerEvent]) -> (usize, usize) {
+fn button_event_indices(events: &[PointerEvent], expected_button: u32) -> (usize, usize) {
     // Assumption: both direct helper use and Action dispatch eventually call Smithay's
-    // `pointer.button()` with Linux BTN_LEFT. If this fails, first check whether the helper still
-    // uses the same button code or whether a future Smithay/niri input abstraction changed the
-    // button code expected by clients.
+    // `pointer.button()` with Linux evdev button codes. If this fails, first check whether the
+    // helper still maps niri_ipc::ClickButton to the same button code or whether a future
+    // Smithay/niri input abstraction changed the button code expected by clients.
     let press_idx = events
         .iter()
         .position(|event| {
             matches!(
                 event,
                 PointerEvent::Button {
-                    button: BTN_LEFT,
+                    button,
                     state: PointerButtonState::Pressed,
-                }
+                } if *button == expected_button
             )
         })
-        .expect("expected simulated click to emit a left button press");
+        .expect("expected simulated click to emit the requested button press");
 
     // Assumption: every synthetic press has a matching synthetic release. A missing release leaves
     // clients believing the mouse button is still held, which is worse than a dropped click.
@@ -82,12 +84,12 @@ fn button_event_indices(events: &[PointerEvent]) -> (usize, usize) {
             matches!(
                 event,
                 PointerEvent::Button {
-                    button: BTN_LEFT,
+                    button,
                     state: PointerButtonState::Released,
-                }
+                } if *button == expected_button
             )
         })
-        .expect("expected simulated click to emit a left button release");
+        .expect("expected simulated click to emit a matching button release");
 
     (press_idx, release_idx)
 }
@@ -109,8 +111,10 @@ fn simulate_click_contract_motion_enter_precedes_buttons_and_uses_target_local_c
     let target = Point::from((geometry.x + local_x, geometry.y + local_y));
 
     f.client(id).state.pointer_events.clear();
-    f.niri_state().simulate_click_press(target).unwrap();
-    f.niri_state().simulate_click_release();
+    f.niri_state()
+        .simulate_click_press(target, ClickButton::Left)
+        .unwrap();
+    f.niri_state().simulate_click_release(ClickButton::Left);
     f.roundtrip(id);
 
     let events = &f.client(id).state.pointer_events;
@@ -155,7 +159,7 @@ fn simulate_click_contract_motion_enter_precedes_buttons_and_uses_target_local_c
         })
         .expect("expected pointer motion at target-local coordinates before the click");
 
-    let (press_idx, release_idx) = button_event_indices(events);
+    let (press_idx, release_idx) = button_event_indices(events, BTN_LEFT);
 
     // Ordering assumption: clients must learn pointer focus before they receive motion. This is
     // mostly Smithay protocol sequencing, but a future refactor could accidentally bypass
@@ -193,8 +197,10 @@ fn simulate_click_assumption_warp_updates_pointer_location_and_visible_pointer_s
     let geometry = focused_window_global_geometry(&mut f);
     let target = Point::from((geometry.x + 25., geometry.y + 30.));
 
-    f.niri_state().simulate_click_press(target).unwrap();
-    f.niri_state().simulate_click_release();
+    f.niri_state()
+        .simulate_click_press(target, ClickButton::Left)
+        .unwrap();
+    f.niri_state().simulate_click_release(ClickButton::Left);
 
     let pointer_location = f.niri().seat.get_pointer().unwrap().current_location();
     // Assumption: `pointer.motion()` is the operation that actually warps Smithay's compositor
@@ -213,6 +219,46 @@ fn simulate_click_assumption_warp_updates_pointer_location_and_visible_pointer_s
 }
 
 #[test]
+fn simulate_click_button_flag_contract_maps_buttons_to_evdev_codes() {
+    // simulate-click button flag contract:
+    // `--button left|right|middle` changes only the button code sent to clients; the motion/warp
+    // path remains the same.
+    //
+    // Niri implementation assumption guarded here:
+    // niri_ipc::ClickButton is mapped directly to Linux evdev BTN_LEFT/BTN_RIGHT/BTN_MIDDLE before
+    // calling Smithay's `pointer.button()`. If future Niri introduces a richer mouse-button type,
+    // this is the mapping to preserve for this personal fork.
+    let cases = [
+        (ClickButton::Left, BTN_LEFT),
+        (ClickButton::Right, BTN_RIGHT),
+        (ClickButton::Middle, BTN_MIDDLE),
+    ];
+
+    for (button, expected_button_code) in cases {
+        let (mut f, id, _surface) = set_up_window();
+        let geometry = focused_window_global_geometry(&mut f);
+        let target = Point::from((geometry.x + 20., geometry.y + 20.));
+
+        f.client(id).state.pointer_events.clear();
+        f.niri_state().simulate_click_press(target, button).unwrap();
+        f.niri_state().simulate_click_release(button);
+        f.roundtrip(id);
+
+        let events = &f.client(id).state.pointer_events;
+        let (press_idx, release_idx) = button_event_indices(events, expected_button_code);
+
+        // Assertion purpose: the requested logical button must be the exact evdev code clients see
+        // in both press and release. This catches accidental fallbacks to left-click when adding
+        // new CLI/IPC fields or rebasing the enum through niri_config::Action.
+        assert!(
+            press_idx < release_idx,
+            "expected {button:?} press/release with evdev button {expected_button_code}; \
+             events: {events:#?}"
+        );
+    }
+}
+
+#[test]
 fn simulate_click_contract_rejects_invalid_targets_before_button_dispatch() {
     // simulate-click error contract:
     // bad targets fail before any button event can be sent.
@@ -225,7 +271,7 @@ fn simulate_click_contract_rejects_invalid_targets_before_button_dispatch() {
 
     let err = f
         .niri_state()
-        .simulate_click_press(Point::from((f64::NAN, 10.)))
+        .simulate_click_press(Point::from((f64::NAN, 10.)), ClickButton::Left)
         .unwrap_err();
     // Assumption: invalid floating-point inputs are rejected before any hit test. This avoids
     // accidentally feeding NaN through geometry comparisons whose behavior may be surprising.
@@ -236,7 +282,7 @@ fn simulate_click_contract_rejects_invalid_targets_before_button_dispatch() {
 
     let err = f
         .niri_state()
-        .simulate_click_press(Point::from((5000., 5000.)))
+        .simulate_click_press(Point::from((5000., 5000.)), ClickButton::Left)
         .unwrap_err();
     // Assumption: `Niri::output_under()` is the boundary check for global logical screen space.
     // If this starts passing, revisit whether output geometry, output scaling, or global-space
@@ -248,7 +294,7 @@ fn simulate_click_contract_rejects_invalid_targets_before_button_dispatch() {
 
     let err = f
         .niri_state()
-        .simulate_click_press(Point::from((10., 10.)))
+        .simulate_click_press(Point::from((10., 10.)), ClickButton::Left)
         .unwrap_err();
     // Assumption: this feature intentionally clicks client surfaces only. A coordinate on the
     // desktop/background or decoration-only area must not dispatch a button to the previous
@@ -264,7 +310,9 @@ fn simulate_click_contract_rejects_invalid_targets_before_button_dispatch() {
 fn simulate_click_action_assumption_release_is_scheduled_on_calloop_timer() {
     // simulate-click action contract:
     // dispatching the niri_config action sends a press immediately and the matching release from
-    // the 5 ms calloop timer.
+    // the 5 ms calloop timer. Use a middle click rather than the default left click so this also
+    // verifies that the niri_config::Action path preserves the requested button across the timer
+    // closure.
     //
     // Niri implementation assumption guarded here:
     // the bind/action path shares the same press helper as IPC, but does not wait synchronously
@@ -280,6 +328,7 @@ fn simulate_click_action_assumption_release_is_scheduled_on_calloop_timer() {
         Action::SimulateClick {
             x: target_x,
             y: target_y,
+            button: ClickButton::Middle,
         },
         false,
     );
@@ -295,7 +344,7 @@ fn simulate_click_action_assumption_release_is_scheduled_on_calloop_timer() {
     f.roundtrip(id);
 
     let events = &f.client(id).state.pointer_events;
-    let (press_idx, release_idx) = button_event_indices(events);
+    let (press_idx, release_idx) = button_event_indices(events, BTN_MIDDLE);
     // Assumption: the bind/action path must not return a press-only state. The release is delayed
     // by a calloop timer rather than emitted inline, so this assertion protects both timer
     // registration and the closure that calls `simulate_click_release()`.

@@ -388,8 +388,8 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::Action(action) => {
             validate_action(&action)?;
 
-            if let Action::SimulateClick { x, y } = &action {
-                let (x, y) = (*x, *y);
+            if let Action::SimulateClick { x, y, button } = &action {
+                let (x, y, button) = (*x, *y, *button);
                 let (tx, rx) = async_channel::bounded(1);
 
                 ctx.event_loop.insert_idle(move |state| {
@@ -405,7 +405,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                     }
 
                     let location: Point<f64, Logical> = Point::from((x, y));
-                    if let Err(err) = state.simulate_click_press(location) {
+                    if let Err(err) = state.simulate_click_press(location, button) {
                         let _ = tx.send_blocking(Err(err));
                         return;
                     }
@@ -416,7 +416,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                         .niri
                         .event_loop
                         .insert_source(timer, move |_, _, state| {
-                            state.simulate_click_release();
+                            state.simulate_click_release(button);
                             let _ = tx.send_blocking(Ok(()));
                             TimeoutAction::Drop
                         })
@@ -531,7 +531,7 @@ fn validate_action(action: &Action) -> Result<(), String> {
         }
     }
 
-    if let Action::SimulateClick { x, y } = action {
+    if let Action::SimulateClick { x, y, .. } = action {
         if !x.is_finite() || !y.is_finite() {
             return Err(format!("coordinates must be finite, got ({x}, {y})"));
         }
