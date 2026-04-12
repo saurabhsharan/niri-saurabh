@@ -749,7 +749,7 @@ impl State {
                 self.niri.queue_redraw_all();
             }
             Action::Screenshot(show_cursor, one_shot, path) => {
-                self.open_screenshot_ui(show_cursor, one_shot, path);
+                self.open_screenshot_ui(show_cursor, one_shot, path, None);
                 self.niri.cancel_mru();
             }
             Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {

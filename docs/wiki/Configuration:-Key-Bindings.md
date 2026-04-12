@@ -407,6 +407,8 @@ The same option is available through IPC and `niri msg action`:
 niri msg action screenshot --one-shot
 ```
 
+For IPC clients, one-shot screenshot actions respond with the captured area in global logical coordinates, or `null` if no area was selected.
+
 #### `toggle-keyboard-shortcuts-inhibit`
 
 <sup>Since: 25.02</sup>

@@ -381,6 +381,27 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         Request::Action(action) => {
             validate_action(&action)?;
 
+            if let Action::Screenshot {
+                show_pointer,
+                one_shot: true,
+                path,
+            } = action
+            {
+                let (tx, rx) = async_channel::bounded(1);
+
+                ctx.event_loop.insert_idle(move |state| {
+                    // Make sure some logic like workspace clean-up has a chance to run before
+                    // doing actions.
+                    state.niri.advance_animations();
+                    state.open_screenshot_ui(show_pointer, true, path, Some(tx));
+                    state.niri.cancel_mru();
+                });
+
+                let result = rx.recv().await;
+                let area = result.map_err(|_| String::from("error getting screenshot area"))?;
+                return Ok(Response::ScreenshotArea(area));
+            }
+
             let (tx, rx) = async_channel::bounded(1);
 
             let action = niri_config::Action::from(action);
