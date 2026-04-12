@@ -77,11 +77,13 @@ This geometry describes the window visual geometry itself, not the tile: it excl
 `layout.global_screen_geometry` is not part of the regular window list or event-stream window layout updates.
 Use `niri msg --json focused-window` or the `FocusedWindow` IPC request when you need this field.
 
-#### Simulated Clicks
+#### Pointer Warps and Simulated Clicks
 
-This fork adds an IPC action for scripts that need to click at a known screen position:
+This fork adds IPC actions for scripts that need to move or click the pointer at a known screen position:
 
 ```sh
+niri msg action warp-pointer --x 720 --y 480
+niri msg action warp-pointer --x 720 --y 480 --emit-motion false
 niri msg action simulate-click --x 720 --y 480
 niri msg action simulate-click --x 720 --y 480 --button right
 ```
@@ -93,17 +95,28 @@ For example, on a 2880x1920 physical output at scale 2, the logical output size 
 The `--button` value can be `left`, `right`, or `middle`.
 If it is omitted, niri sends a left click.
 
-The action has visible and focus-related side effects.
+`warp-pointer` warps the visible pointer to the requested point and leaves it there.
+By default it also sends normal pointer enter/motion events to the surface under that point, if any.
+This updates normal pointer focus and niri's cached pointer contents similarly to a real pointer motion.
+Set `--emit-motion false` to update only the compositor cursor location.
+With `emit-motion` disabled, niri does not send Wayland pointer enter, leave, motion, or button events, and it does not update pointer focus or niri's cached pointer contents.
+The next real or eventful pointer motion will update pointer focus from the then-current cursor location.
+
+`simulate-click` has visible and focus-related side effects.
 It warps the pointer to the requested point and leaves it there, sends normal pointer motion to the surface under that point, then sends the requested button press and release with a small delay between them.
 Because the pointer motion is sent first, clients receive the expected pointer enter/motion before the button event.
 The click may also activate the window under the pointer or focus an on-demand layer-shell surface, like a real click would.
 
-The action returns an error if the coordinates are not finite, if the point is outside all outputs, if there is no Wayland surface under the point, or if the session is locked.
+`warp-pointer` returns an error if the coordinates are not finite, if the point is outside all outputs, or if the session is locked.
+It can warp to the desktop background or a decoration-only region; if `emit-motion` is enabled and there is no surface at the point, the pointer motion is emitted with no surface focus.
+
+`simulate-click` returns an error if the coordinates are not finite, if the point is outside all outputs, if there is no Wayland surface under the point, or if the session is locked.
 It does not click the desktop background, and it does not click niri's own decoration-only regions when there is no client surface at the target.
 
 For raw JSON IPC, the request is:
 
 ```json
+{"Action":{"WarpPointer":{"x":720.0,"y":480.0,"emit_motion":true}}}
 {"Action":{"SimulateClick":{"x":720.0,"y":480.0,"button":"Right"}}}
 ```
 

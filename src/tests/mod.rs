@@ -11,4 +11,5 @@ mod layer_shell;
 mod pip;
 mod simulate_click;
 mod transactions;
+mod warp_pointer;
 mod window_opening;

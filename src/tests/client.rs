@@ -653,9 +653,10 @@ impl Dispatch<WlPointer, ()> for State {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        // Record only the event fields that are relevant to simulate-click's contract. This keeps
-        // tests resilient to unrelated serial/timestamp changes while still checking that motion
-        // establishes pointer focus and target-local coordinates before button dispatch.
+        // Record only the event fields that are relevant to this fork's synthetic pointer actions.
+        // This keeps tests resilient to unrelated serial/timestamp changes while still checking
+        // that motion establishes pointer focus and target-local coordinates before any optional
+        // button dispatch.
         let event = match event {
             wl_pointer::Event::Enter {
                 surface,
