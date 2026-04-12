@@ -893,6 +893,9 @@ impl State {
                     self.focus_window(&window);
                 }
             }
+            Action::SimulateScroll { x, y } => {
+                self.simulate_scroll(x, y);
+            }
             Action::KeyboardScrollUp(speed, decay, warp_to_focused_window) => {
                 let speed =
                     speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);

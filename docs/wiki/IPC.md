@@ -57,6 +57,21 @@ $ env NIRI_SOCKET=./temp.sock niri msg action focus-workspace 2
 {"Action":{"FocusWorkspace":{"reference":{"Index":2}}}}
 ```
 
+For example, a program can ask niri to emit a finite one-off synthetic scroll gesture at the current cursor location:
+
+```sh
+niri msg action simulate-scroll --y 150
+```
+
+This action is designed for programmatic scroll injection.
+It does not start the held-key keyboard scrolling state machine, does not warp the cursor, and does not use key release or decay handling.
+
+The JSON form accepts `x` and `y` in logical points; omitted axes default to `0.0`:
+
+```json
+{"Action":{"SimulateScroll":{"y":150.0}}}
+```
+
 You can find all available requests and response types in the [niri-ipc sub-crate documentation](https://niri-wm.github.io/niri/niri_ipc/).
 
 ### Backwards Compatibility

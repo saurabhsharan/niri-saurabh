@@ -3,6 +3,7 @@ use std::time::Duration;
 use calloop::timer::{TimeoutAction, Timer};
 use smithay::backend::input::{Axis, AxisRelativeDirection, AxisSource};
 use smithay::input::pointer::AxisFrame;
+use tracing::warn;
 
 use crate::niri::{CenterCoords, PointerVisibility, State};
 use crate::utils::get_monotonic_time;
@@ -53,7 +54,7 @@ pub struct ActiveKeyboardScroll {
 impl State {
     // Reuse Niri's regular pointer-content refresh path so synthetic scrolling follows the same
     // surface targeting rules as real pointer axis events.
-    fn refresh_keyboard_scroll_pointer_focus(&mut self) {
+    fn refresh_synthetic_scroll_pointer_focus(&mut self) {
         self.niri.pointer_visibility = PointerVisibility::Visible;
         self.niri.tablet_cursor_location = None;
         self.update_pointer_contents();
@@ -63,7 +64,7 @@ impl State {
     // latching state until they see a sequence boundary, so relying on the absence of further
     // axis events is not always enough to retarget the next scroll correctly.
     fn emit_keyboard_scroll_stop(&mut self) {
-        self.refresh_keyboard_scroll_pointer_focus();
+        self.refresh_synthetic_scroll_pointer_focus();
 
         let now = get_monotonic_time();
         let pointer = self.niri.seat.get_pointer().unwrap();
@@ -71,6 +72,58 @@ impl State {
             .source(AxisSource::Continuous)
             .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
             .stop(Axis::Vertical);
+
+        pointer.axis(self, frame);
+        pointer.frame(self);
+    }
+
+    // IPC-facing one-shot scroll injection. Unlike keyboard-scroll-up/down, this is not tied to
+    // keyboard press/release state and does not start the keyboard-scroll timer or warp the cursor.
+    pub(super) fn simulate_scroll(&mut self, x: f64, y: f64) {
+        if !x.is_finite() || !y.is_finite() {
+            warn!(x, y, "ignoring simulate-scroll with non-finite amount");
+            return;
+        }
+
+        if x == 0. && y == 0. {
+            return;
+        }
+
+        self.stop_keyboard_scroll_immediately();
+        self.refresh_synthetic_scroll_pointer_focus();
+
+        let now = get_monotonic_time();
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        let mut frame = AxisFrame::new(now.as_millis() as u32).source(AxisSource::Continuous);
+
+        if x != 0. {
+            frame = frame
+                .relative_direction(Axis::Horizontal, AxisRelativeDirection::Identical)
+                .value(Axis::Horizontal, x);
+        }
+
+        if y != 0. {
+            frame = frame
+                .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
+                .value(Axis::Vertical, y);
+        }
+
+        pointer.axis(self, frame);
+        pointer.frame(self);
+
+        let mut frame = AxisFrame::new(now.as_millis() as u32).source(AxisSource::Continuous);
+
+        if x != 0. {
+            frame = frame
+                .relative_direction(Axis::Horizontal, AxisRelativeDirection::Identical)
+                .stop(Axis::Horizontal);
+        }
+
+        if y != 0. {
+            frame = frame
+                .relative_direction(Axis::Vertical, AxisRelativeDirection::Identical)
+                .stop(Axis::Vertical);
+        }
 
         pointer.axis(self, frame);
         pointer.frame(self);
@@ -196,7 +249,7 @@ impl State {
             return;
         }
 
-        self.refresh_keyboard_scroll_pointer_focus();
+        self.refresh_synthetic_scroll_pointer_focus();
 
         let now = get_monotonic_time();
         let delta = now.saturating_sub(scroll.last_tick_time);
