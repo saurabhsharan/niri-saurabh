@@ -164,10 +164,12 @@ pub enum Action {
     KeyboardScrollUp(
         #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
         #[knuffel(property(name = "decay"), default = true)] bool,
+        #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
     ),
     KeyboardScrollDown(
         #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
         #[knuffel(property(name = "decay"), default = true)] bool,
+        #[knuffel(property(name = "warp-to-focused-window"), default)] bool,
     ),
     FocusColumnLeft,
     #[knuffel(skip)]

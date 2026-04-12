@@ -112,6 +112,7 @@ You can also bind keyboard keys to emit synthetic continuous scroll events while
 This is useful for compositor-native page-style scrolling that works in apps with a scroll view.
 You can optionally pass the scroll speed with `speed=...`, in logical pixels per second.
 You can also set `decay=false` to disable the short decay tail after key release.
+Set `warp-to-focused-window=true` to move the cursor to the center of the focused window before scrolling, so the scroll targets the focused window regardless of the cursor's previous position.
 If omitted, the built-in defaults are used.
 
 ```kdl
@@ -126,6 +127,10 @@ binds {
     // Disable the release decay.
     Ctrl+Alt+S { keyboard-scroll-down decay=false; }
     Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
+
+    // First warp the cursor to the focused window.
+    Ctrl+Super+S { keyboard-scroll-down warp-to-focused-window=true; }
+    Ctrl+Super+Q { keyboard-scroll-up warp-to-focused-window=true; }
 }
 ```
 
@@ -368,6 +373,7 @@ You can also set `decay=false` to disable the short decay tail after key release
 By default, decay is enabled.
 The decay curve itself is fixed and does not change with `speed`, but a higher `speed` starts that decay from a higher velocity, so it will usually scroll farther and take a bit longer to come to a stop.
 Decay only applies to key release; focus/output/target changes still stop scrolling immediately.
+You can set `warp-to-focused-window=true` to first warp the cursor to the center of the focused window, ensuring the scroll event is delivered to the focused window rather than wherever the cursor currently is.
 This action is only available from the `binds {}` config and is not exposed through `niri msg action`.
 
 ```kdl
@@ -382,6 +388,10 @@ binds {
     // Disable the release decay.
     Ctrl+Alt+S { keyboard-scroll-down decay=false; }
     Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
+
+    // First warp the cursor to the focused window.
+    Ctrl+Super+S { keyboard-scroll-down warp-to-focused-window=true; }
+    Ctrl+Super+Q { keyboard-scroll-up warp-to-focused-window=true; }
 }
 ```
 

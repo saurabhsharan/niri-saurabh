@@ -790,7 +790,7 @@ impl State {
     fn start_key_repeat(&mut self, bind: Bind) {
         if matches!(
             bind.action,
-            Action::KeyboardScrollUp(_, _) | Action::KeyboardScrollDown(_, _)
+            Action::KeyboardScrollUp(_, _, _) | Action::KeyboardScrollDown(_, _, _)
         ) {
             return;
         }
@@ -1131,15 +1131,25 @@ impl State {
                     self.focus_window(&window);
                 }
             }
-            Action::KeyboardScrollUp(speed, decay) => {
+            Action::KeyboardScrollUp(speed, decay, warp_to_focused_window) => {
                 let speed =
                     speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
-                self.start_keyboard_scroll(KeyboardScrollDirection::Up, speed, decay);
+                self.start_keyboard_scroll(
+                    KeyboardScrollDirection::Up,
+                    speed,
+                    decay,
+                    warp_to_focused_window,
+                );
             }
-            Action::KeyboardScrollDown(speed, decay) => {
+            Action::KeyboardScrollDown(speed, decay, warp_to_focused_window) => {
                 let speed =
                     speed.map_or(DEFAULT_KEYBOARD_SCROLL_PIXELS_PER_SECOND, |speed| speed.0);
-                self.start_keyboard_scroll(KeyboardScrollDirection::Down, speed, decay);
+                self.start_keyboard_scroll(
+                    KeyboardScrollDirection::Down,
+                    speed,
+                    decay,
+                    warp_to_focused_window,
+                );
             }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();

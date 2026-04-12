@@ -513,13 +513,16 @@ binds {
     // second, and set decay=false to disable the release decay tail. The
     // decay curve itself stays the same regardless of speed, but higher
     // speeds will decay from a higher starting velocity and therefore
-    // usually travel farther before stopping.
+    // usually travel farther before stopping. Set warp-to-focused-window=true
+    // to first warp the cursor to the center of the focused window.
     // Ctrl+S { keyboard-scroll-down; }
     // Ctrl+Q { keyboard-scroll-up; }
     // Ctrl+Shift+S { keyboard-scroll-down speed=300; }
     // Ctrl+Shift+Q { keyboard-scroll-up speed=300; }
     // Ctrl+Alt+S { keyboard-scroll-down decay=false; }
     // Ctrl+Alt+Q { keyboard-scroll-up decay=false; }
+    // Ctrl+Super+S { keyboard-scroll-down warp-to-focused-window=true; }
+    // Ctrl+Super+Q { keyboard-scroll-up warp-to-focused-window=true; }
 
     // You can refer to workspaces by index. However, keep in mind that
     // niri is a dynamic workspace system, so these commands are kind of
