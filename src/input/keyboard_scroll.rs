@@ -4,7 +4,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use smithay::backend::input::{Axis, AxisRelativeDirection, AxisSource};
 use smithay::input::pointer::AxisFrame;
 
-use crate::niri::{PointerVisibility, State};
+use crate::niri::{CenterCoords, PointerVisibility, State};
 use crate::utils::get_monotonic_time;
 
 const KEYBOARD_SCROLL_INTERVAL: Duration = Duration::from_nanos(8_333_333);
@@ -81,9 +81,14 @@ impl State {
         direction: KeyboardScrollDirection,
         speed: f64,
         decay: bool,
+        warp_to_focused_window: bool,
     ) {
         if self.niri.active_keyboard_scroll.is_some() {
             self.emit_keyboard_scroll_stop();
+        }
+
+        if warp_to_focused_window {
+            self.move_cursor_to_focused_tile(CenterCoords::BothAlways);
         }
 
         let now = get_monotonic_time();
