@@ -159,6 +159,8 @@ pub enum Response {
     PickedWindow(Option<Window>),
     /// Information about the picked color.
     PickedColor(Option<PickedColor>),
+    /// Information about the area captured by a one-shot screenshot action.
+    ScreenshotArea(Option<ScreenshotArea>),
     /// Output configuration change result.
     OutputConfigChanged(OutputConfigChanged),
     /// Information about the overview.
@@ -181,6 +183,20 @@ pub struct Overview {
 pub struct PickedColor {
     /// Color values as red, green, blue, each ranging from 0.0 to 1.0.
     pub rgb: [f64; 3],
+}
+
+/// Area captured by a one-shot screenshot action.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct ScreenshotArea {
+    /// Global logical X position.
+    pub x: f64,
+    /// Global logical Y position.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: f64,
+    /// Height in logical pixels.
+    pub height: f64,
 }
 
 /// Actions that niri can perform.

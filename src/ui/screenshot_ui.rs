@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::Context;
 use arrayvec::ArrayVec;
 use niri_config::{Action, Config};
-use niri_ipc::SizeChange;
+use niri_ipc::{ScreenshotArea, SizeChange};
 use pango::{Alignment, FontDescription};
 use pangocairo::cairo::{self, ImageSurface};
 use smithay::backend::allocator::Fourcc;
@@ -66,6 +66,7 @@ pub enum ScreenshotUi {
         alt_down: bool,
         shift_down: bool,
         one_shot: bool,
+        ipc_screenshot_area_tx: Option<async_channel::Sender<Option<ScreenshotArea>>>,
         show_pointer: bool,
         open_anim: Animation,
         clock: Clock,
@@ -248,8 +249,12 @@ impl ScreenshotUi {
         show_pointer: bool,
         one_shot: bool,
         path: Option<String>,
+        ipc_screenshot_area_tx: Option<async_channel::Sender<Option<ScreenshotArea>>>,
     ) -> bool {
         if screenshots.is_empty() {
+            if let Some(tx) = ipc_screenshot_area_tx {
+                let _ = tx.send_blocking(None);
+            }
             return false;
         }
 
@@ -259,6 +264,9 @@ impl ScreenshotUi {
             config,
         } = self
         else {
+            if let Some(tx) = ipc_screenshot_area_tx {
+                let _ = tx.send_blocking(None);
+            }
             return false;
         };
 
@@ -348,6 +356,7 @@ impl ScreenshotUi {
             alt_down: false,
             shift_down: false,
             one_shot,
+            ipc_screenshot_area_tx,
             show_pointer,
             open_anim,
             clock: clock.clone(),
@@ -361,6 +370,8 @@ impl ScreenshotUi {
     }
 
     pub fn close(&mut self) -> bool {
+        self.send_ipc_screenshot_area(None);
+
         let Self::Open {
             selection,
             clock,
@@ -383,6 +394,47 @@ impl ScreenshotUi {
         };
 
         true
+    }
+
+    pub fn screenshot_area(&self) -> Option<ScreenshotArea> {
+        let Self::Open {
+            selection,
+            selection_active,
+            ..
+        } = self
+        else {
+            return None;
+        };
+
+        if !*selection_active {
+            return None;
+        }
+
+        let output = &selection.0;
+        let output_loc = output.current_location();
+        let output_scale = output.current_scale().fractional_scale();
+        let rect = rect_from_corner_points(selection.1, selection.2);
+
+        Some(ScreenshotArea {
+            x: f64::from(output_loc.x) + f64::from(rect.loc.x) / output_scale,
+            y: f64::from(output_loc.y) + f64::from(rect.loc.y) / output_scale,
+            width: f64::from(rect.size.w) / output_scale,
+            height: f64::from(rect.size.h) / output_scale,
+        })
+    }
+
+    pub fn send_ipc_screenshot_area(&mut self, area: Option<ScreenshotArea>) {
+        let Self::Open {
+            ipc_screenshot_area_tx,
+            ..
+        } = self
+        else {
+            return;
+        };
+
+        if let Some(tx) = ipc_screenshot_area_tx.take() {
+            let _ = tx.send_blocking(area);
+        }
     }
 
     pub fn toggle_pointer(&mut self) {
