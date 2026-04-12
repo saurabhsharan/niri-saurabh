@@ -4269,8 +4269,8 @@ impl State {
     }
 
     fn on_gesture_swipe_begin<I: InputBackend>(&mut self, event: I::GestureSwipeBeginEvent) {
-        if self.niri.window_mru_ui.is_open() {
-            // Don't start swipe gestures while in the MRU.
+        if self.niri.window_mru_ui.is_open() || self.niri.layout.is_expose_open() {
+            // Don't start swipe gestures while in the MRU or expose.
             return;
         }
 
