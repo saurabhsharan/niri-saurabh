@@ -18,6 +18,7 @@ use niri_config::{
     Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
     WorkspaceReference, Xkb,
 };
+use niri_ipc::ClickButton;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::{ButtonState, Keycode};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -186,6 +187,8 @@ use crate::window::{InitialConfigureState, Mapped, ResolvedWindowRules, Unmapped
 
 const CLEAR_COLOR_LOCKED: [f32; 4] = [0.3, 0.1, 0.1, 1.];
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
 
 // We'll try to send frame callbacks at least once a second. We'll make a timer that fires once a
 // second, so with the worst timing the maximum interval between two frame callbacks for a surface
@@ -883,7 +886,11 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
-    pub fn simulate_click_press(&mut self, location: Point<f64, Logical>) -> Result<(), String> {
+    pub fn simulate_click_press(
+        &mut self,
+        location: Point<f64, Logical>,
+        button: ClickButton,
+    ) -> Result<(), String> {
         if !location.x.is_finite() || !location.y.is_finite() {
             return Err(format!(
                 "coordinates must be finite, got ({}, {})",
@@ -947,20 +954,25 @@ impl State {
         self.niri.focus_layer_surface_if_on_demand(under.layer);
         self.niri.queue_redraw_all();
 
-        self.simulate_click_button(ButtonState::Pressed);
+        self.simulate_click_button(button, ButtonState::Pressed);
         Ok(())
     }
 
-    pub fn simulate_click_release(&mut self) {
-        self.simulate_click_button(ButtonState::Released);
+    pub fn simulate_click_release(&mut self, button: ClickButton) {
+        self.simulate_click_button(button, ButtonState::Released);
     }
 
-    fn simulate_click_button(&mut self, state: ButtonState) {
+    fn simulate_click_button(&mut self, button: ClickButton, state: ButtonState) {
+        let button = match button {
+            ClickButton::Left => BTN_LEFT,
+            ClickButton::Right => BTN_RIGHT,
+            ClickButton::Middle => BTN_MIDDLE,
+        };
         let pointer = &self.niri.seat.get_pointer().unwrap();
         pointer.button(
             self,
             &ButtonEvent {
-                button: BTN_LEFT,
+                button,
                 state,
                 serial: SERIAL_COUNTER.next_serial(),
                 time: get_monotonic_time().as_millis() as u32,

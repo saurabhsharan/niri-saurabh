@@ -183,6 +183,25 @@ pub struct PickedColor {
     pub rgb: [f64; 3],
 }
 
+/// Mouse button for a simulated click.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub enum ClickButton {
+    /// Left mouse button.
+    Left,
+    /// Right mouse button.
+    Right,
+    /// Middle mouse button.
+    Middle,
+}
+
+impl Default for ClickButton {
+    fn default() -> Self {
+        Self::Left
+    }
+}
+
 /// Actions that niri can perform.
 // Variants in this enum should match the spelling of the ones in niri-config. Most, but not all,
 // variants from niri-config should be present here.
@@ -932,16 +951,16 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: u64,
     },
-    /// Simulate a left mouse click at logical screen coordinates.
+    /// Simulate a mouse click at logical screen coordinates.
     ///
     /// The coordinates are global logical screen coordinates, in the same coordinate space as
     /// `focused-window`'s `layout.global_screen_geometry` and output logical sizes. On a 2880x1920
     /// physical output at scale 2, the output is 1440x960 logical pixels.
     ///
     /// This action warps the visible pointer to the requested point, sends pointer motion to the
-    /// surface under that point, then sends a left-button press and release. The pointer remains at
-    /// the requested point afterwards. The compositor may also activate the clicked window or focus
-    /// an on-demand layer-shell surface, like a real click would.
+    /// surface under that point, then sends a button press and release. The pointer remains at the
+    /// requested point afterwards. The compositor may also activate the clicked window or focus an
+    /// on-demand layer-shell surface, like a real click would.
     SimulateClick {
         /// X position in logical screen coordinates.
         #[cfg_attr(feature = "clap", arg(long))]
@@ -950,6 +969,11 @@ pub enum Action {
         /// Y position in logical screen coordinates.
         #[cfg_attr(feature = "clap", arg(long))]
         y: f64,
+
+        /// Mouse button to click.
+        #[serde(default)]
+        #[cfg_attr(feature = "clap", arg(long, value_enum, default_value = "left"))]
+        button: ClickButton,
     },
     /// Reload the config file.
     ///
