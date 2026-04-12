@@ -2292,9 +2292,9 @@ impl State {
                 }
                 self.niri.queue_redraw_all();
             }
-            Action::SimulateClick { x, y } => {
+            Action::SimulateClick { x, y, button } => {
                 let location = Point::from((x, y));
-                if let Err(err) = self.simulate_click_press(location) {
+                if let Err(err) = self.simulate_click_press(location, button) {
                     warn!("error simulating click: {err}");
                     return;
                 }
@@ -2302,8 +2302,8 @@ impl State {
                 let timer = Timer::from_duration(Duration::from_millis(5));
                 self.niri
                     .event_loop
-                    .insert_source(timer, |_, _, state| {
-                        state.simulate_click_release();
+                    .insert_source(timer, move |_, _, state| {
+                        state.simulate_click_release(button);
                         TimeoutAction::Drop
                     })
                     .unwrap();

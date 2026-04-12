@@ -6,7 +6,8 @@ use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
 use niri_ipc::{
-    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
+    ClickButton, ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange,
+    WorkspaceReferenceArg,
 };
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
 use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
@@ -371,6 +372,7 @@ pub enum Action {
     SimulateClick {
         x: f64,
         y: f64,
+        button: ClickButton,
     },
     #[knuffel(skip)]
     LoadConfigFile(#[knuffel(argument)] Option<String>),
@@ -704,7 +706,9 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ToggleWindowUrgent { id } => Self::ToggleWindowUrgent(id),
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
-            niri_ipc::Action::SimulateClick { x, y } => Self::SimulateClick { x, y },
+            niri_ipc::Action::SimulateClick { x, y, button } => {
+                Self::SimulateClick { x, y, button }
+            }
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
         }
     }
