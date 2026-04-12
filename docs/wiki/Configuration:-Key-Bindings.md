@@ -476,6 +476,8 @@ The same option is available through IPC and `niri msg action`:
 niri msg action screenshot --one-shot
 ```
 
+For IPC clients, one-shot screenshot actions respond with the captured area in global logical coordinates, or `null` if no area was selected.
+
 <sup>Since: next release</sup> You can show the mouse pointer on window screenshots with the `show-pointer=true` property.
 The pointer will be included only if the window is currently receiving pointer input (usually this means the pointer is on top of the window).
 

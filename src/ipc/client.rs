@@ -317,10 +317,31 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 println!("No color was picked.");
             }
         }
-        Msg::Action { .. } => {
-            let Response::Handled = response else {
-                bail!("unexpected response: expected Handled, got {response:?}");
-            };
+        Msg::Action { action } => {
+            if matches!(action, Action::Screenshot { one_shot: true, .. }) {
+                let Response::ScreenshotArea(area) = response else {
+                    bail!("unexpected response: expected ScreenshotArea, got {response:?}");
+                };
+
+                if json {
+                    let area = serde_json::to_string(&area).context("error formatting response")?;
+                    println!("{area}");
+                    return Ok(());
+                }
+
+                if let Some(area) = area {
+                    println!(
+                        "Screenshot area: x={} y={} width={} height={}",
+                        area.x, area.y, area.width, area.height
+                    );
+                } else {
+                    println!("No screenshot area was selected.");
+                }
+            } else {
+                let Response::Handled = response else {
+                    bail!("unexpected response: expected Handled, got {response:?}");
+                };
+            }
         }
         Msg::Output { output, .. } => {
             let Response::OutputConfigChanged(response) = response else {

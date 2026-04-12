@@ -718,6 +718,15 @@ pub struct State {
     pub niri: Niri,
 }
 
+fn send_ipc_screenshot_area(
+    tx: Option<async_channel::Sender<Option<niri_ipc::ScreenshotArea>>>,
+    area: Option<niri_ipc::ScreenshotArea>,
+) {
+    if let Some(tx) = tx {
+        let _ = tx.send_blocking(area);
+    }
+}
+
 impl State {
     pub fn new(
         config: Config,
@@ -2129,9 +2138,16 @@ impl State {
         self.niri.output_management_state.notify_changes(new_config);
     }
 
-    pub fn open_screenshot_ui(&mut self, show_pointer: bool, one_shot: bool, path: Option<String>) {
+    pub fn open_screenshot_ui(
+        &mut self,
+        show_pointer: bool,
+        one_shot: bool,
+        path: Option<String>,
+        ipc_screenshot_area_tx: Option<async_channel::Sender<Option<niri_ipc::ScreenshotArea>>>,
+    ) -> bool {
         if self.niri.is_locked() || self.niri.screenshot_ui.is_open() {
-            return;
+            send_ipc_screenshot_area(ipc_screenshot_area_tx, None);
+            return false;
         }
 
         let default_output = self
@@ -2139,7 +2155,8 @@ impl State {
             .output_under_cursor()
             .or_else(|| self.niri.layout.active_output().cloned());
         let Some(default_output) = default_output else {
-            return;
+            send_ipc_screenshot_area(ipc_screenshot_area_tx, None);
+            return false;
         };
 
         self.niri.update_render_elements(None);
@@ -2148,7 +2165,8 @@ impl State {
             .backend
             .with_primary_renderer(|renderer| self.niri.capture_screenshots(renderer).collect())
         else {
-            return;
+            send_ipc_screenshot_area(ipc_screenshot_area_tx, None);
+            return false;
         };
 
         // Now that we captured the screenshots, clear grabs like drag-and-drop, etc.
@@ -2161,7 +2179,8 @@ impl State {
             touch.unset_grab(self);
         }
 
-        self.backend.with_primary_renderer(|renderer| {
+        let mut ipc_screenshot_area_tx = ipc_screenshot_area_tx;
+        let Some(opened) = self.backend.with_primary_renderer(|renderer| {
             self.niri.screenshot_ui.open(
                 renderer,
                 screenshots,
@@ -2169,13 +2188,23 @@ impl State {
                 show_pointer,
                 one_shot,
                 path,
+                ipc_screenshot_area_tx.take(),
             )
-        });
+        }) else {
+            send_ipc_screenshot_area(ipc_screenshot_area_tx, None);
+            return false;
+        };
+
+        if !opened {
+            return false;
+        }
 
         self.niri
             .cursor_manager
             .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
         self.niri.queue_redraw_all();
+
+        true
     }
 
     pub fn handle_pick_color(&mut self, tx: async_channel::Sender<Option<niri_ipc::PickedColor>>) {
@@ -2199,10 +2228,13 @@ impl State {
             return;
         };
         let path = path.take();
+        let screenshot_area = self.niri.screenshot_ui.screenshot_area();
+        let mut captured_area = None;
 
         self.backend.with_primary_renderer(|renderer| {
             match self.niri.screenshot_ui.capture(renderer) {
                 Ok((size, pixels)) => {
+                    captured_area = screenshot_area;
                     if let Err(err) = self.niri.save_screenshot(size, pixels, write_to_disk, path) {
                         warn!("error saving screenshot: {err:?}");
                     }
@@ -2213,6 +2245,9 @@ impl State {
             }
         });
 
+        self.niri
+            .screenshot_ui
+            .send_ipc_screenshot_area(captured_area);
         self.niri.screenshot_ui.close();
         self.niri
             .cursor_manager
