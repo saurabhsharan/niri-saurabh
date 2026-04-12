@@ -430,6 +430,34 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
                 };
             }
 
+            if let Action::WarpPointer { x, y, emit_motion } = &action {
+                let (x, y, emit_motion) = (*x, *y, *emit_motion);
+                let (tx, rx) = async_channel::bounded(1);
+
+                ctx.event_loop.insert_idle(move |state| {
+                    // Make sure some logic like workspace clean-up has a chance to run before
+                    // doing actions.
+                    state.niri.advance_animations();
+
+                    if state.niri.is_locked() {
+                        let _ = tx.send_blocking(Err(String::from(
+                            "warp-pointer is not allowed while locked",
+                        )));
+                        return;
+                    }
+
+                    let location: Point<f64, Logical> = Point::from((x, y));
+                    let result = state.warp_pointer(location, emit_motion);
+                    let _ = tx.send_blocking(result);
+                });
+
+                return match rx.recv().await {
+                    Ok(Ok(())) => Ok(Response::Handled),
+                    Ok(Err(err)) => Err(err),
+                    Err(_) => Err(String::from("error warping pointer")),
+                };
+            }
+
             let (tx, rx) = async_channel::bounded(1);
 
             let action = niri_config::Action::from(action);
@@ -531,7 +559,7 @@ fn validate_action(action: &Action) -> Result<(), String> {
         }
     }
 
-    if let Action::SimulateClick { x, y, .. } = action {
+    if let Action::SimulateClick { x, y, .. } | Action::WarpPointer { x, y, .. } = action {
         if !x.is_finite() || !y.is_finite() {
             return Err(format!("coordinates must be finite, got ({x}, {y})"));
         }

@@ -10,4 +10,5 @@ mod fullscreen;
 mod layer_shell;
 mod simulate_click;
 mod transactions;
+mod warp_pointer;
 mod window_opening;

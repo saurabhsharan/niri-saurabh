@@ -2308,6 +2308,12 @@ impl State {
                     })
                     .unwrap();
             }
+            Action::WarpPointer { x, y, emit_motion } => {
+                let location = Point::from((x, y));
+                if let Err(err) = self.warp_pointer(location, emit_motion) {
+                    warn!("error warping pointer: {err}");
+                }
+            }
             Action::LoadConfigFile(path) => {
                 if let Some(watcher) = &self.niri.config_file_watcher {
                     watcher.load_config(path);

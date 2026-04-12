@@ -879,6 +879,71 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    pub fn warp_pointer(
+        &mut self,
+        location: Point<f64, Logical>,
+        emit_motion: bool,
+    ) -> Result<(), String> {
+        if !location.x.is_finite() || !location.y.is_finite() {
+            return Err(format!(
+                "coordinates must be finite, got ({}, {})",
+                location.x, location.y
+            ));
+        }
+
+        if self.niri.output_under(location).is_none() {
+            return Err(format!(
+                "point ({}, {}) is outside all outputs",
+                location.x, location.y
+            ));
+        }
+
+        self.niri.pointer_visibility = PointerVisibility::Visible;
+        self.niri.tablet_cursor_location = None;
+
+        let pointer = &self.niri.seat.get_pointer().unwrap();
+
+        if !emit_motion {
+            pointer.set_location(location);
+            self.niri.queue_redraw_all();
+            return Ok(());
+        }
+
+        let under = self.niri.contents_under(location);
+        self.niri.handle_focus_follows_mouse(&under);
+        self.niri.pointer_contents.clone_from(&under);
+
+        pointer.motion(
+            self,
+            under.surface.clone(),
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
+
+        // Smithay uses the first motion to a new surface to establish pointer focus and emit
+        // wl_pointer.enter. Send a second same-position motion so clients also observe an explicit
+        // wl_pointer.motion at the target coordinates after a warp.
+        pointer.motion(
+            self,
+            under.surface,
+            &MotionEvent {
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: get_monotonic_time().as_millis() as u32,
+            },
+        );
+        pointer.frame(self);
+
+        self.niri.maybe_activate_pointer_constraint();
+        self.niri.queue_redraw_all();
+
+        Ok(())
+    }
+
     pub fn simulate_click_press(
         &mut self,
         location: Point<f64, Logical>,
