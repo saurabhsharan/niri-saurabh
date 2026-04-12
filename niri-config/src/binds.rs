@@ -161,6 +161,13 @@ pub enum Action {
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
+    // IPC-only one-shot scroll injection. Keep this separate from keyboard-scroll-up/down, which
+    // are bind-only held-key actions with timer, release, decay, and optional focus-warp handling.
+    #[knuffel(skip)]
+    SimulateScroll {
+        x: f64,
+        y: f64,
+    },
     KeyboardScrollUp(
         #[knuffel(property(name = "speed"))] Option<FloatOrInt<0, 1_000_000>>,
         #[knuffel(property(name = "decay"), default = true)] bool,
@@ -470,6 +477,7 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
             niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
             niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
+            niri_ipc::Action::SimulateScroll { x, y } => Self::SimulateScroll { x, y },
             niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
             niri_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
             niri_ipc::Action::FocusColumnFirst {} => Self::FocusColumnFirst,

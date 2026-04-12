@@ -198,8 +198,9 @@ binds {
 
 ### Actions
 
-Every action that you can bind is also available for programmatic invocation via `niri msg action`.
+Most actions that you can bind are also available for programmatic invocation via `niri msg action`.
 Run `niri msg action` to get a full list of actions along with their short descriptions.
+Some actions are bind-only, and some are only meant for programmatic IPC use.
 
 Here are a few actions that benefit from more explanation.
 
@@ -363,11 +364,31 @@ Or, in scripts:
 niri msg action do-screen-transition --delay-ms 100
 ```
 
+#### `simulate-scroll`
+
+Emit one synthetic continuous scroll gesture at the current cursor location.
+
+This action is intended for programmatic use from third-party tools that want to inject a one-off scroll amount.
+It is only exposed through `niri msg action`, not `binds {}`.
+It does not warp the cursor.
+It also does not integrate with keyboard press/release handling, key repeat, decay, or held-key state.
+For user-facing key bindings that scroll continuously while a key is held, use [`keyboard-scroll-up` and `keyboard-scroll-down`](#keyboard-scroll-up-keyboard-scroll-down).
+Pass `--x` and/or `--y` in logical points.
+Positive `--y` scrolls down, negative `--y` scrolls up; positive `--x` scrolls right, negative `--x` scrolls left.
+
+```shell
+niri msg action simulate-scroll --y 150
+niri msg action simulate-scroll --y -150
+niri msg action simulate-scroll --x 80
+```
+
 #### `keyboard-scroll-up`, `keyboard-scroll-down`
 
 Emit synthetic continuous scroll events while the key is held down.
 
-This can be used as a compositor-native page scrolling bind that works in applications with a scroll view, without depending on the application supporting a specific keyboard shortcut.
+This is the user-facing held-key scrolling action.
+It integrates with niri's keyboard event handling so it starts on key press, stops or decays on key release, and can optionally warp the cursor to the focused window first.
+It can be used as a compositor-native page scrolling bind that works in applications with a scroll view, without depending on the application supporting a specific keyboard shortcut.
 You can optionally pass the scroll speed with `speed=...`, in logical pixels per second.
 You can also set `decay=false` to disable the short decay tail after key release.
 By default, decay is enabled.
