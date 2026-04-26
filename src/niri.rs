@@ -4388,7 +4388,7 @@ impl Niri {
 
         if self.pips_are_visible() {
             self.pip_manager
-                .render_for_output(self, output, renderer, target, &mut |elem| {
+                .render_for_output(self, output, ctx.r(), &mut |elem| {
                     push(elem.into())
                 });
         }

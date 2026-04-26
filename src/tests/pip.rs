@@ -7,7 +7,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use super::client::{ClientId, LayerConfigureProps};
 use super::*;
 use crate::layout::LayoutElement as _;
-use crate::render_helpers::RenderTarget;
+use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::output_size;
 use crate::window::mapped::MappedId;
 
@@ -102,8 +102,12 @@ fn render_output_smoke(f: &mut Fixture, output: &Output) -> usize {
     let backend = &mut state.backend;
     backend
         .with_primary_renderer(|renderer| {
-            niri.render(renderer, &output, false, RenderTarget::Output)
-                .len()
+            let ctx = RenderCtx {
+                renderer,
+                target: RenderTarget::Output,
+                xray: None,
+            };
+            niri.render_to_vec(ctx, &output, false).len()
         })
         .unwrap()
 }
