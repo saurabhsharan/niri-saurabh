@@ -4438,7 +4438,7 @@ impl Niri {
             // EXPOSE INTEGRATION: When expose is active, render the expose grid
             // instead of normal workspace rendering.
             if mon.is_expose_open() {
-                mon.render_expose(renderer, target, &mut |elem| push(elem.into()));
+                mon.render_expose(ctx.r(), &mut |elem| push(elem.into()));
             } else {
                 mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
             }

@@ -31,7 +31,6 @@ use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::solid_color::SolidColorRenderElement;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
-use crate::render_helpers::RenderTarget;
 use crate::render_helpers::texture::{TextureBuffer, TextureRenderElement};
 use crate::rubber_band::RubberBand;
 use crate::utils::transaction::Transaction;
@@ -1989,8 +1988,7 @@ impl<W: LayoutElement> Monitor<W> {
     // with title + app_id labels below each thumbnail.
     pub fn render_expose<R: NiriRenderer>(
         &self,
-        renderer: &mut R,
-        target: RenderTarget,
+        mut ctx: RenderCtx<R>,
         push: &mut dyn FnMut(MonitorRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Monitor::render_expose");
@@ -2018,7 +2016,7 @@ impl<W: LayoutElement> Monitor<W> {
                 cache.scale = scale;
                 cache.textures.clear();
 
-                let gles = renderer.as_gles_renderer();
+                let gles = ctx.renderer.as_gles_renderer();
                 for exposed in &expose_layout.windows {
                     let tile_and_pos = ws
                         .tiles_with_render_positions()
@@ -2070,13 +2068,14 @@ impl<W: LayoutElement> Monitor<W> {
                              win_pos: Point<f64, Logical>,
                              win_scale: f64,
                              focus_ring: bool,
-                             renderer: &mut R,
+                             ctx: RenderCtx<R>,
                              push: &mut dyn FnMut(MonitorRenderElement<R>)| {
+            let xray_pos = XrayPos::new(win_pos, win_scale);
             tile.render(
-                renderer,
+                ctx,
                 Point::from((0., 0.)),
+                xray_pos,
                 focus_ring,
-                target,
                 &mut |elem| {
                     let elem = WorkspaceRenderElement::from(
                         ScrollingSpaceRenderElement::from(elem),
@@ -2111,7 +2110,7 @@ impl<W: LayoutElement> Monitor<W> {
                 let anim_pos = super::expose::lerp_point(grid_pos, preview_pos, pp);
                 let anim_scale = super::expose::lerp(grid_scale, preview_scale, pp);
 
-                render_window(tile, anim_pos, anim_scale, false, renderer, push);
+                render_window(tile, anim_pos, anim_scale, false, ctx.r(), push);
 
                 // Border around the previewed window.
                 let bw = EXPOSE_SELECTION_BORDER_WIDTH;
@@ -2162,7 +2161,7 @@ impl<W: LayoutElement> Monitor<W> {
                     .find(|(t, _, _)| *t.window().id() == exposed.id)
                     .map(|(t, _, _)| t)
                     .unwrap(),
-                target_pos, target_scale, true, renderer, push,
+                target_pos, target_scale, true, ctx.r(), push,
             );
 
             // Render the label below the window thumbnail.
