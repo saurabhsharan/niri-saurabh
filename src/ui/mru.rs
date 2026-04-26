@@ -44,6 +44,8 @@ use crate::utils::{
 use crate::window::mapped::MappedId;
 use crate::window::Mapped;
 
+use super::app_icon::AppIconTexture;
+
 #[cfg(test)]
 mod tests;
 
@@ -73,6 +75,12 @@ const BACKDROP_COLOR: Color32F = Color32F::new(0., 0., 0., 0.8);
 
 /// Font used to render the window titles.
 const FONT: &str = "sans 14px";
+
+/// App icon size next to the window title.
+const TITLE_ICON_SIZE: f64 = 20.;
+
+/// Gap from the app icon to the window title.
+const TITLE_ICON_GAP: f64 = 8.;
 
 /// Scopes in the order they are cycled through.
 ///
@@ -225,6 +233,11 @@ struct Thumbnail {
     open_animation: Option<Animation>,
     move_animation: Option<MoveAnimation>,
     title_texture: RefCell<TitleTexture>,
+    /// Cached app icon texture for the title row.
+    ///
+    /// App IDs are cached when the thumbnail is created, so the icon follows the same lifetime as
+    /// app-ID filtering and does not require live refiltering.
+    app_icon_texture: RefCell<AppIconTexture>,
     background: RefCell<FocusRing>,
     border: RefCell<FocusRing>,
 }
@@ -257,6 +270,7 @@ impl Thumbnail {
             open_animation: None,
             move_animation: None,
             title_texture: Default::default(),
+            app_icon_texture: Default::default(),
             background: RefCell::new(background),
             border: RefCell::new(border),
         }
@@ -333,6 +347,34 @@ impl Thumbnail {
                 .as_ref()
                 .and_then(|title| self.title_texture.borrow_mut().get(renderer, title, scale))
         })
+    }
+
+    /// Returns the cached app-icon texture for this thumbnail at the current output scale.
+    /// The app-icon module owns desktop-file lookup and image decoding, keeping MRU layout code narrow.
+    fn app_icon_texture(&self, renderer: &mut GlesRenderer, scale: f64) -> Option<MruTexture> {
+        self.app_icon_texture.borrow_mut().get(
+            renderer,
+            self.app_id.as_deref(),
+            TITLE_ICON_SIZE,
+            scale,
+        )
+    }
+
+    /// Computes the last known title-row size without doing new rendering or icon lookup.
+    /// Pointer hit testing uses this best-effort stale size so it stays independent from renderer state.
+    fn stale_title_row_size(&self, max_width: f64, scale: f64) -> Option<Size<f64, Logical>> {
+        let title_texture = self.title_texture.borrow();
+        let title_size = title_texture.get_stale()?.logical_size();
+
+        let icon_texture = self.app_icon_texture.borrow();
+        let icon_size = icon_texture.get_stale().map(MruTexture::logical_size);
+
+        Some(title_row_size(
+            title_size,
+            icon_size,
+            max_width,
+            round_logical_in_physical(scale, TITLE_ICON_GAP),
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -454,47 +496,95 @@ impl Thumbnail {
             push(elem)
         });
 
-        let mut title_size = None;
-        let title_texture = self.title_texture(ctx.as_gles().renderer, mapped, scale);
+        let title_icon_gap = round(TITLE_ICON_GAP);
+        let (title_texture, app_icon_texture) = {
+            let ctx = ctx.as_gles();
+            let title_texture = self.title_texture(ctx.renderer, mapped, scale);
+            // Only show icons when a title will be shown. That preserves the old "no title means
+            // no title-row chrome" behavior and avoids lone icons for untitled surfaces.
+            let app_icon_texture = title_texture
+                .is_some()
+                .then(|| self.app_icon_texture(ctx.renderer, scale))
+                .flatten();
+            (title_texture, app_icon_texture)
+        };
         let title_texture = title_texture.map(|texture| {
-            let mut size = texture.logical_size();
-            size.w = f64::min(size.w, preview_geo.size.w);
-            title_size = Some(size);
+            let size = texture.logical_size();
             (texture, size)
         });
+        let app_icon_texture = app_icon_texture.map(|texture| {
+            let size = texture.logical_size();
+            (texture, size)
+        });
+        let title_row_size = title_texture.as_ref().map(|(_, title_size)| {
+            title_row_size(
+                *title_size,
+                app_icon_texture.as_ref().map(|(_, size)| *size),
+                preview_geo.size.w,
+                title_icon_gap,
+            )
+        });
 
-        // Hide title for blocked-out windows, but only after computing the title size. This way,
+        // Hide title for blocked-out windows, but only after computing the title row size. This way,
         // the background and the border won't have to oscillate in size between normal and
         // screencast renders, causing excessive damage.
         let should_block_out = ctx.target.should_block_out(mapped.rules().block_out_from);
-        let title_texture = title_texture.filter(|_| !should_block_out);
 
-        if let Some((texture, size)) = title_texture {
-            // Clip from the right if it doesn't fit.
-            let src = Rectangle::from_size(size);
-
-            let loc = preview_geo.loc
+        if let (Some(row_size), false) = (title_row_size, should_block_out) {
+            let row_loc = preview_geo.loc
                 + Point::new(
-                    (preview_geo.size.w - size.w) / 2.,
+                    (preview_geo.size.w - row_size.w) / 2.,
                     preview_geo.size.h + title_gap,
                 );
-            let loc = loc.to_physical_precise_round(scale).to_logical(scale);
-            let texture = TextureRenderElement::from_texture_buffer(
-                texture,
-                loc,
-                preview_alpha,
-                Some(src),
-                None,
-                Kind::Unspecified,
-            );
+            let mut x = 0.;
 
-            let ctx = ctx.as_gles();
-            if let Some(program) = GradientFadeTextureRenderElement::shader(ctx.renderer) {
-                let elem = GradientFadeTextureRenderElement::new(texture, program);
-                push(WindowMruUiRenderElement::GradientFadeElem(elem));
-            } else {
-                let elem = PrimaryGpuTextureRenderElement(texture);
-                push(WindowMruUiRenderElement::TextureElement(elem));
+            if let Some((texture, size)) = app_icon_texture {
+                // Clip the icon first if the preview is too narrow; whatever space remains goes to
+                // the title texture, which still gets the existing right-edge fade.
+                let visible_width = f64::min(size.w, row_size.w);
+                if visible_width > 0. {
+                    let src =
+                        Rectangle::from_size(Size::<f64, Logical>::from((visible_width, size.h)));
+                    let loc = row_loc + Point::new(x, (row_size.h - size.h) / 2.);
+                    let loc = loc.to_physical_precise_round(scale).to_logical(scale);
+
+                    push_texture(
+                        ctx.as_gles().renderer,
+                        texture,
+                        loc,
+                        preview_alpha,
+                        Some(src),
+                        false,
+                        push,
+                    );
+                }
+
+                x += visible_width;
+                if visible_width >= size.w && title_texture.is_some() {
+                    x += f64::min(title_icon_gap, (row_size.w - x).max(0.));
+                }
+            }
+
+            if let Some((texture, size)) = title_texture {
+                // The title texture is already one line; source clipping plus the gradient fade
+                // preserves the previous truncation behavior with room reserved for the icon.
+                let visible_width = f64::min(size.w, (row_size.w - x).max(0.));
+                if visible_width > 0. {
+                    let src =
+                        Rectangle::from_size(Size::<f64, Logical>::from((visible_width, size.h)));
+                    let loc = row_loc + Point::new(x, (row_size.h - size.h) / 2.);
+                    let loc = loc.to_physical_precise_round(scale).to_logical(scale);
+
+                    push_texture(
+                        ctx.as_gles().renderer,
+                        texture,
+                        loc,
+                        preview_alpha,
+                        Some(src),
+                        true,
+                        push,
+                    );
+                }
             }
         }
 
@@ -505,8 +595,8 @@ impl Thumbnail {
             let mut size = preview_geo.size;
             size += padding.to_size().upscale(2.);
 
-            if let Some(title_size) = title_size {
-                size.h += title_gap + title_size.h;
+            if let Some(title_row_size) = title_row_size {
+                size.h += title_gap + title_row_size.h;
                 // Subtract half the padding so it looks more balanced visually.
                 size.h -= round(padding.y / 2.);
             }
@@ -842,6 +932,56 @@ fn matches(scope: MruScope, app_id_filter: Option<&str>, thumbnail: &Thumbnail) 
 
 fn match_filter(scope: MruScope, app_id_filter: Option<&str>) -> impl Fn(&Thumbnail) -> bool + '_ {
     move |thumbnail| matches(scope, app_id_filter, thumbnail)
+}
+
+/// Computes the logical bounds of the icon-plus-title row, capped to the preview width.
+/// The icon contributes width and height only when present, so old title-only sizing remains unchanged.
+fn title_row_size(
+    title_size: Size<f64, Logical>,
+    icon_size: Option<Size<f64, Logical>>,
+    max_width: f64,
+    icon_gap: f64,
+) -> Size<f64, Logical> {
+    let icon_width = icon_size.map_or(0., |size| size.w);
+    let icon_height = icon_size.map_or(0., |size| size.h);
+    let icon_gap = if icon_size.is_some() { icon_gap } else { 0. };
+
+    let width = f64::min(title_size.w + icon_gap + icon_width, max_width);
+    let height = f64::max(title_size.h, icon_height);
+
+    Size::from((width, height))
+}
+
+/// Pushes a GPU texture into the MRU render element stream, optionally with the title fade shader.
+/// Icons use the plain texture path while titles request the fade path to keep right-side truncation readable.
+fn push_texture<R: NiriRenderer>(
+    renderer: &mut GlesRenderer,
+    texture: MruTexture,
+    loc: Point<f64, Logical>,
+    alpha: f32,
+    src: Option<Rectangle<f64, Logical>>,
+    fade: bool,
+    push: &mut dyn FnMut(WindowMruUiRenderElement<R>),
+) {
+    let texture = TextureRenderElement::from_texture_buffer(
+        texture,
+        loc,
+        alpha,
+        src,
+        None,
+        Kind::Unspecified,
+    );
+
+    if fade {
+        if let Some(program) = GradientFadeTextureRenderElement::shader(renderer) {
+            let elem = GradientFadeTextureRenderElement::new(texture, program);
+            push(WindowMruUiRenderElement::GradientFadeElem(elem));
+            return;
+        }
+    }
+
+    let elem = PrimaryGpuTextureRenderElement(texture);
+    push(WindowMruUiRenderElement::TextureElement(elem));
 }
 
 impl ViewPos {
@@ -1612,12 +1752,11 @@ impl Inner {
             geo.loc -= padding;
             geo.size += padding.to_size().upscale(2.);
 
-            // It doesn't really matter all that much if the title texture is stale here, and it
-            // would be annoying to thread the rendering into this function. The texture might be
-            // one frame stale or so.
-            if let Some(texture) = thumbnail.title_texture.borrow().get_stale() {
-                let title_size = texture.logical_size();
-                geo.size.h += title_gap + title_size.h;
+            // It doesn't really matter all that much if the title row is stale here, and it would
+            // be annoying to thread the rendering into this function. The texture might be one
+            // frame stale or so.
+            if let Some(title_row_size) = thumbnail.stale_title_row_size(geo.size.w, scale) {
+                geo.size.h += title_gap + title_row_size.h;
                 // Subtract half the padding so it looks more balanced visually.
                 geo.size.h -= round(padding.y / 2.);
             }
